@@ -260,7 +260,19 @@ Claude 인증/네트워크, Git lock, 테스트 인프라 오류는 사용자 �
 - 강제 종료 뒤 state만으로 마지막 완료 stage 다음부터 재개한다.
 - 관련 wiki 문서 전체가 어떤 Claude context에도 포함되지 않았음을 input manifest/log로 입증한다.
 
-## 14. 구현 현황과 남은 작업
+## 14. 대시보드
+
+`admin`의 `/harness`(로컬 전용)에서 진행 상태를 보고 사람 결정을 입력한다.
+
+- 요구사항 탭: 전체(등록·승인)와 현재 상태(사람 개입 필요·진행 중) 수, 우선순위순 진행 가능 목록, 완료 목록. 선택하면 단계 진행, 사람 결정, Spec, 이슈, 단계별 처리 로그를 보여준다.
+- 이슈 탭: 전체(등록·MR 생성)와 현재 상태 수, 우선순위순 진행 가능 목록과 고정, 완료 목록, 선택한 이슈의 단계 진행과 처리 로그.
+- 처리 로그는 단계별 아코디언이며 입력·출력·로그를 탭으로 본다. Markdown은 HTML로 렌더링하고, 모델 응답의 `markdown` 필드는 문서로, 나머지 필드는 JSON으로 보여준다.
+- 목록과 상세는 몇 초마다 폴링하지만 내용이 바뀐 부분만 다시 그려, 스크롤 위치와 열린 패널이 유지된다. 단계 내용은 펼칠 때만 불러온다.
+- 사람 결정: Spec의 `UNRESOLVED` 질문(선택지가 있으면 선택, 직접 입력 가능)에 답하고, Spec을 수정하고, 승인한다. 승인은 열린 질문이 없을 때만 가능하고, 수정하면 이전 승인 요청은 취소된다. 자동 승인 검토가 세 번 반려하면 Spec은 `NEEDS_HUMAN_REVIEW`로 멈추고 사람이 수정하거나 승인한다.
+- 고정한 이슈는 같은 repo lane에서 먼저 처리한다. 다른 lane의 병렬 실행은 유지된다.
+- 대시보드는 run state를 직접 쓰지 않는다. 실행 중인 오케스트레이터가 state를 메모리에 두고 덮어쓰기 때문이다. 대신 `.harness/commands/`에 명령 파일을 남기고, 오케스트레이터가 시작, backlog 선택 전, issue wave 선택 전 checkpoint에서 적용한 뒤 결과와 함께 `processed/`로 옮긴다. 멈춘 run은 결정을 입력한 뒤 `pnpm harness resume`으로 재개한다.
+
+## 15. 구현 현황과 남은 작업
 
 `scripts/harness` 구현은 1~13절의 흐름을 갖췄다: 단계별 독립 `claude -p` 세션과 모델 매핑, wiki 부분 발췌, 자동 Spec 승인과 수정 반복, issue DAG 검증, repo lane 병렬 wave, 구현계획·계획 Review, code/wiki slice, 최대 3회 구현·검증·Review, controller 테스트 실행, local MR, 파일 state·lock·재개, 단계별 input/output·session·log 기록, 요청 문서 사전 검사.
 

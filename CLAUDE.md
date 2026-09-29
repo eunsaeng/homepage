@@ -8,7 +8,7 @@ Local development workspace for the Bankware Global homepage CMS rebuild. Four i
 
 - `apps/api` — Kotlin / Spring Boot 4 WebFlux, R2DBC + Flyway on PostgreSQL, JDK 25 (port 8080). Built with Gradle, **not** part of the pnpm workspace.
 - `web` — public Next.js 16 site (port 3000).
-- `admin` — CMS Next.js 16 app (port 3001). Currently also hosts the local-only **harness dashboard** API (`src/app/api/harness/**`), which reads `requirements/` and `.harness/` from disk.
+- `admin` — CMS Next.js 16 app (port 3001). Currently also hosts the local-only **harness dashboard** at `/harness` (API under `src/app/api/harness/**`). It reads `requirements/` and `.harness/` from disk and never writes run state: pins, answers to Spec questions, Spec edits and approvals are queued as files in `.harness/commands/`, and the orchestrator applies them at its checkpoints (`scripts/harness/lib/commands.mjs`). `HARNESS_WORKSPACE_ROOT` points it at another workspace.
 - `e2e` — Playwright tests.
 
 The pnpm workspace (`pnpm-workspace.yaml`) contains `web`, `admin` and `e2e`. Shared versions (React 19, TypeScript 7, ESLint 10) come from its `catalog:`.
