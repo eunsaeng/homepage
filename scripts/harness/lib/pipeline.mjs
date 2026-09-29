@@ -299,7 +299,7 @@ async function generateSpec(runDir, state, item, wikiIndex) {
   }
 
   for (let reviewAttempt = 1; reviewAttempt <= 3; reviewAttempt += 1) {
-    const review = await modelStage({ runDir, stage: `approvals/${item.backlogId}/attempt-${reviewAttempt}`, model: MODELS.specApproval, prompt: `${PROMPTS.specApproval(specMarkdown)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
+    const review = await modelStage({ runDir, stage: `approvals/${item.backlogId}/attempt-${reviewAttempt}`, model: MODELS.specApproval, prompt: `${PROMPTS.specApproval(specMarkdown, item.markdown, excerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `approvals/${item.backlogId}/attempt-${reviewAttempt}/approval-review.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
     if (review.data.decision === 'APPROVE') {
@@ -750,7 +750,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
     await saveIssueState(issue.id, record);
     await saveState(state);
 
-    const review = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/review`, model: MODELS.codeReview, prompt: `${PROMPTS.codeReview(issue, specMarkdown, plan.markdown ?? '', diff, verification)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
+    const review = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/review`, model: MODELS.codeReview, prompt: `${PROMPTS.codeReview(issue, specMarkdown, plan.markdown ?? '', diff, verification, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/review/code-review.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
     if (!testsPassed || review.data.decision !== 'APPROVE') {
