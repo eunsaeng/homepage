@@ -61,6 +61,16 @@ test('an issue that hit the review limit gets three more iterations', () => {
   assert.equal(applyCommand(current, { type: 'retry-issue', issue_id: 'BL-done--x' }).status, 'rejected');
 });
 
+test('a retry can carry owner guidance as an answered decision', () => {
+  const current = state();
+  current.issues['BL-done--x'] = { status: 'REWORK_REQUIRED', attempt: 3 };
+  applyCommand(current, { type: 'retry-issue', issue_id: 'BL-done--x', note: 'Follow api-spec: fields stays empty for 400.' });
+  const issue = current.issues['BL-done--x'];
+  assert.equal(issue.unresolved_questions.length, 1);
+  assert.equal(issue.unresolved_resolutions[issue.unresolved_questions[0].id], 'Follow api-spec: fields stays empty for 400.');
+  assert.deepEqual(pendingQuestions(issue), []);
+});
+
 test('command files are applied in order and archived with their result', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'harness-commands-'));
   try {

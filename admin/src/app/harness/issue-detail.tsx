@@ -1,6 +1,7 @@
 "use client";
 
 import type { IssueDetail, PendingCommand } from "@/lib/harness-types";
+import { useState } from "react";
 import { QuestionCard } from "./requirement-detail";
 import { MarkdownView, PriorityBadge, Section, StageAccordion, StatusBadge, Stepper } from "./ui";
 
@@ -10,7 +11,7 @@ type Props = {
   pinPending: boolean;
   onTogglePin: () => void;
   retryPending: boolean;
-  onRetry: () => void;
+  onRetry: (note: string) => void;
   pending: PendingCommand[];
   onChanged: () => void;
   openStages: Set<string>;
@@ -21,6 +22,7 @@ type Props = {
 export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retryPending, onRetry, pending, onChanged, openStages, onToggleStage, onSelectRequirement }: Props) {
   const { issue, steps, stages } = detail;
   const done = issue.status === "MR_READY";
+  const [retryNote, setRetryNote] = useState("");
   return (
     <div className="space-y-6 rounded-xl border border-zinc-200 bg-zinc-50/60 p-5">
       <header className="space-y-1">
@@ -46,7 +48,9 @@ export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retry
       {issue.status === "REWORK_REQUIRED" && issue.displayStatus === "WAITING_FOR_HUMAN" && (
         <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
           <span className="flex-1">구현↔리뷰 반복 한도를 모두 사용했습니다. 마지막 리뷰 지적을 입력으로 3회 더 반복하거나, 처리 로그의 코드 리뷰를 확인하세요.</span>
-          <button type="button" disabled={retryPending} onClick={onRetry}
+          <textarea value={retryNote} onChange={(event) => setRetryNote(event.target.value)} rows={2} placeholder="재시도에 전달할 결정 (선택)"
+            className="w-full rounded border border-amber-300 bg-white p-2 text-sm text-zinc-800" />
+          <button type="button" disabled={retryPending} onClick={() => onRetry(retryNote)}
             className="rounded bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50">
             {retryPending ? "재시도 요청됨 · 하네스 재개 시 반영" : "3회 더 반복"}
           </button>

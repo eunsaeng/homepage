@@ -41,6 +41,14 @@ export function applyCommand(state, command) {
       const limit = issue.max_attempts ?? MAX_REVIEW_ITERATIONS;
       if (issue.status !== 'REWORK_REQUIRED' || (issue.attempt ?? 0) < limit) return reject('Only an issue that used all its review iterations can be retried.');
       issue.max_attempts = limit + MAX_REVIEW_ITERATIONS;
+      // Optional guidance travels to the next iterations as an answered owner decision.
+      const note = String(command.note ?? '').trim();
+      if (note) {
+        const guidance = normalizeQuestion(`Owner guidance for retry after ${limit} iterations`, 'retry');
+        const id = questionId(`${guidance.text}:${note}`);
+        issue.unresolved_questions = [...(issue.unresolved_questions ?? []), { ...guidance, id }];
+        issue.unresolved_resolutions = { ...(issue.unresolved_resolutions ?? {}), [id]: note };
+      }
       return { status: 'applied' };
     }
     case 'resolve-question': {

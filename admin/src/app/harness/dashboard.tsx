@@ -223,7 +223,7 @@ export function HarnessDashboard() {
                 onTogglePin={() => togglePin(issueDetail.data!.issue)}
                 pending={pending} onChanged={refreshAll}
                 retryPending={pending.some((command) => command.type === "retry-issue" && command.issueId === selectedId)}
-                onRetry={() => { void sendCommand({ type: "retry-issue", issueId: selectedId }).then(refreshAll, (caught: unknown) => setActionError(caught instanceof Error ? caught.message : String(caught))); }}
+                onRetry={(note) => { void sendCommand({ type: "retry-issue", issueId: selectedId, note: note.trim() || undefined }).then(refreshAll, (caught: unknown) => setActionError(caught instanceof Error ? caught.message : String(caught))); }}
                 openStages={openStages} onToggleStage={toggleStage}
                 onSelectRequirement={(id) => select("requirements", id)} />
             ) : <p className="text-sm text-zinc-500">{issueDetail.error ?? "불러오는 중…"}</p>)}

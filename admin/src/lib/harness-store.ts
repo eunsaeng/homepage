@@ -462,6 +462,7 @@ export async function enqueueCommand(command: DashboardCommand) {
     if (!state.issues?.[command.issueId]) throw new Error("Unknown issue.");
     payload.issue_id = command.issueId;
     if (command.type === "pin-issue") payload.pinned = command.pinned;
+    if (command.type === "retry-issue" && command.note) payload.note = command.note;
   } else {
     if (!command.backlogId || !state.backlog?.[command.backlogId]) throw new Error("Unknown requirement.");
     payload.backlog_id = command.backlogId;

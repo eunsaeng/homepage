@@ -20,7 +20,8 @@ function parseCommand(body: unknown): DashboardCommand {
       return { type: "pin-issue", issueId: input.issueId, pinned: input.pinned };
     case "retry-issue":
       if (typeof input.issueId !== "string" || !issueId.test(input.issueId)) throw new Error("Invalid retry command.");
-      return { type: "retry-issue", issueId: input.issueId };
+      if (input.note !== undefined && (typeof input.note !== "string" || input.note.length > 10_000)) throw new Error("Invalid retry note.");
+      return { type: "retry-issue", issueId: input.issueId, note: typeof input.note === "string" && input.note.trim() ? input.note : undefined };
     case "resolve-question": {
       // A question belongs to a requirement (Spec) or to an issue (plan, implementation, review).
       const forIssue = typeof input.issueId === "string" && issueId.test(input.issueId);

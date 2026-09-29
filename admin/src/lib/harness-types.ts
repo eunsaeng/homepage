@@ -107,7 +107,7 @@ export type IssueDetail = { issue: Issue; steps: Step[]; stages: StageLog[] };
 
 export type DashboardCommand =
   | { type: "pin-issue"; issueId: string; pinned: boolean }
-  | { type: "retry-issue"; issueId: string }
+  | { type: "retry-issue"; issueId: string; note?: string }
   | { type: "resolve-question"; backlogId?: string; issueId?: string; questionId: string; answer: string }
   | { type: "edit-spec"; backlogId: string; markdown: string }
   | { type: "approve-spec"; backlogId: string };
