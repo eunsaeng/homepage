@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runProcess } from '../lib/util.mjs';
-import { carryOverCompleted, modelStage, StagePauseError } from '../lib/pipeline.mjs';
+import { carryOverCompleted, isRepositoryTestPath, modelStage, StagePauseError } from '../lib/pipeline.mjs';
 
 // A stand-in for `claude -p --output-format json`: replies from a script of responses, one per call.
 async function fakeClaude(dir, replies) {
@@ -89,4 +89,13 @@ test('a new run carries over completed backlog items and their issues only', () 
   assert.equal(next.issues['BL-done--x'].carried_from_run, 'run-a');
   // Carried records keep pointing at the run that produced them.
   assert.equal(carryOverCompleted(next, { run_id: 'run-c', backlog: {}, issues: {} }).backlog['BL-done'].carried_from_run, 'run-a');
+});
+
+test('only test sources of the issue repository may be updated outside the plan allowlist', () => {
+  assert.equal(isRepositoryTestPath('apps/api/src/test/kotlin/x/AdminAccessRulesTests.kt', 'apps'), true);
+  assert.equal(isRepositoryTestPath('apps/api/src/main/kotlin/x/AdminRouteRoles.kt', 'apps'), false);
+  assert.equal(isRepositoryTestPath('admin/src/lib/auth/session.test.ts', 'admin'), true);
+  assert.equal(isRepositoryTestPath('admin/src/lib/auth/session.ts', 'admin'), false);
+  assert.equal(isRepositoryTestPath('web/src/app/page.spec.tsx', 'admin'), false);
+  assert.equal(isRepositoryTestPath('e2e/tests/login.spec.ts', 'e2e'), true);
 });

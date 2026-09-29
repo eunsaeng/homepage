@@ -237,7 +237,7 @@ Claude 인증/네트워크, Git lock, 테스트 인프라 오류는 사용자 �
 ## 11. 보안 및 변경 경계
 
 - 각 Claude 세션에는 최소 context와 해당 worktree만 제공한다. API key, token, 전체 process environment를 prompt나 log에 넣지 않는다.
-- repo별 허용 경로를 issue에 선언하고, stage 후 변경 경로가 allowlist 밖이면 자동 Review로 넘기지 않고 격리·수정한다.
+- repo별 허용 경로를 issue에 선언하고, stage 후 변경 경로가 allowlist 밖이면 자동 Review로 넘기지 않고 격리·수정한다. 예외로, 같은 repository의 테스트 소스(`apps/**/src/test/**`, `*.test.*`·`*.spec.*`, e2e 전체)는 allowlist 밖이어도 수정을 허용하고 controller log에 기록한다. 새 경로가 공용 테스트(예: 관리자 경로 권한 테스트)를 함께 고쳐야 하는 경우가 많기 때문이며, 변경은 diff로 리뷰된다.
 - `requirements` backlog 원문은 자동 편집하지 않는다. 승인 Spec과 구현계획에 명시된 wiki 문서 변경만 검토 대상이다.
 - Git 기본 branch, 사용자 설정 파일, 다른 repo lane worktree는 worker가 수정하지 않는다.
 - model 출력은 untrusted data로 취급한다. shell command는 issue plan에 등록된 allowlist와 controller policy를 통해서만 실행한다.

@@ -466,6 +466,15 @@ function globRegex(glob) {
   return new RegExp(`^${escaped}$`);
 }
 
+// Test sources that belong to the issue's primary repository.
+export function isRepositoryTestPath(file, repository) {
+  const normalized = file.replaceAll('\\', '/');
+  const root = repository === 'apps' ? 'apps/' : `${repository}/`;
+  if (!normalized.startsWith(root)) return false;
+  if (repository === 'e2e') return true;
+  return /\/src\/test\//.test(normalized) || /\.(test|spec)\.[cm]?[jt]sx?$/.test(normalized);
+}
+
 const isWikiPath = (file) => /^wiki\/[^/]+\.md$/.test(file.replaceAll('\\', '/'));
 
 function pathAllowed(file, patterns) {
@@ -838,7 +847,15 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
         for (const file of deletions) await rm(path.join(work.worktree, ...file.split('/')), { force: true });
       }
       const changed = await changedPaths(work.worktree);
-      const violations = changed.filter((file) => !pathAllowed(file, [...slicePaths, ...allowedPaths]));
+      const outsideAllowlist = changed.filter((file) => !pathAllowed(file, [...slicePaths, ...allowedPaths]));
+      // Shared tests of the issue's own repository (for example the admin route rules test that every new route
+      // must extend) may be updated outside the plan's allowlist; the review sees them in the diff.
+      const testUpdates = outsideAllowlist.filter((file) => isRepositoryTestPath(file, issue.primary_repository));
+      if (testUpdates.length) {
+        record.extra_test_paths = [...new Set([...(record.extra_test_paths ?? []), ...testUpdates])];
+        await appendJsonLine(path.join(runDir, 'logs', 'controller.jsonl'), { stage: sliceStage, issue_id: issue.id, event: 'test-paths-outside-allowlist', files: testUpdates });
+      }
+      const violations = outsideAllowlist.filter((file) => !testUpdates.includes(file));
       if (violations.length) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, message: 'Worker edited paths outside the approved allowlist.', files: violations });
     }
 
