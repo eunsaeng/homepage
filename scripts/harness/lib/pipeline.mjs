@@ -227,7 +227,7 @@ function nextBacklog(items, state) {
   const pending = items.filter((item) => state.backlog[item.backlogId]?.status !== 'COMPLETED');
   if (pending.length === 0) return null;
   const ready = pending.filter((item) => state.backlog[item.backlogId].dependencies.every((dep) => state.backlog[dep]?.status === 'COMPLETED'));
-  ready.sort((a, b) => priorityRank(state.backlog[a.backlogId].priority) - priorityRank(state.backlog[b.backlogId].priority) || a.backlogId.localeCompare(b.backlogId));
+  ready.sort((a, b) => priorityRank[state.backlog[a.backlogId].priority] - priorityRank[state.backlog[b.backlogId].priority] || a.backlogId.localeCompare(b.backlogId));
   return ready[0] ?? false;
 }
 
@@ -846,7 +846,7 @@ async function createSpecIssuesAndRun(runDir, state, item, wikiIndex, allItems) 
   return { paused: false };
 }
 
-export async function runHarness({ resume = false } = {}) {
+export async function runHarness({ resume = false, only = [] } = {}) {
   try {
     return await withStateLock(async () => {
     let state = await loadState();
@@ -854,7 +854,11 @@ export async function runHarness({ resume = false } = {}) {
     if (!resume && state && state.phase !== 'QUEUE_DRAINED') {
       throw new Error('An active or paused run exists. Use `pnpm harness resume` or inspect it with `pnpm harness status`.');
     }
-    if (!resume || state.phase === 'QUEUE_DRAINED') state = createInitialState();
+    if (!resume || state.phase === 'QUEUE_DRAINED') {
+      state = createInitialState();
+      // `run --only` limits a trial run to named backlog items; resume keeps the same scope.
+      state.only_backlog_ids = only;
+    }
     activeState = state;
     state.phase = 'RUNNING';
     await saveState(state);
@@ -866,7 +870,11 @@ export async function runHarness({ resume = false } = {}) {
     state.base_sha = baseSha;
     await saveState(state);
 
-    const items = await loadBacklog(REQUIREMENTS_DIR);
+    const allItems = await loadBacklog(REQUIREMENTS_DIR);
+    const scope = state.only_backlog_ids ?? [];
+    const unknown = scope.filter((id) => !allItems.some((item) => item.backlogId === id));
+    if (unknown.length) throw new Error(`Unknown backlog id for --only: ${unknown.join(', ')}`);
+    const items = scope.length ? allItems.filter((item) => scope.includes(item.backlogId)) : allItems;
     const wikiIndex = await indexWiki(WIKI_DIR);
     state.backlog_snapshot = items.map((item) => ({ id: item.backlogId, file_name: item.fileName, source_hash: item.contentHash }));
     await saveState(state);

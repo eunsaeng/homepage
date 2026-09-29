@@ -86,7 +86,9 @@ async function status() {
 
 async function run(resume) {
   const { runHarness } = await import('./lib/pipeline.mjs');
-  const result = await runHarness({ resume });
+  const onlyIndex = process.argv.indexOf('--only');
+  const only = onlyIndex > 0 ? (process.argv[onlyIndex + 1] ?? '').split(',').map((id) => id.trim()).filter(Boolean) : [];
+  const result = await runHarness({ resume, only });
   if (result?.paused) {
     console.error(`Harness paused: ${result.reason}\nAlert: ${result.alertPath}`);
   } else if (result?.phase === 'QUEUE_DRAINED') {
@@ -108,6 +110,6 @@ switch (command) {
     await run(true);
     break;
   default:
-    console.log('Usage: pnpm harness <validate [--fix]|status|run|resume>');
+    console.log('Usage: pnpm harness <validate [--fix]|status|run [--only BL-id,...]|resume>');
     process.exitCode = command === 'help' ? 0 : 2;
 }
