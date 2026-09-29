@@ -2,7 +2,7 @@ import { createServer } from 'node:net';
 import { access, mkdir, readFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { MODELS, REPOSITORIES, REQUIREMENTS_DIR, ROOT, RUNS_DIR, STATE_DIR, TEST_COMMANDS, WORKTREES_DIR } from './config.mjs';
+import { MAX_REVIEW_ITERATIONS, MODELS, REPOSITORIES, REQUIREMENTS_DIR, ROOT, RUNS_DIR, STATE_DIR, TEST_COMMANDS, WIKI_DIR, WORKTREES_DIR } from './config.mjs';
 import { loadBacklog } from './backlog.mjs';
 import { runClaudeStage } from './claude-session.mjs';
 import { PROMPTS } from './prompts.mjs';
