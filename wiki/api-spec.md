@@ -13,6 +13,13 @@
 - 로컬 stub 로그인과 stub 계정 목록 API는 Spring의 `local` 프로필에서만 등록된다. 다른 프로필에서는 `404 NOT_FOUND`를 반환한다.
 - API는 요청마다 세션 유효성, 계정 활성 상태, 필요한 역할을 확인한다. UI 권한 제어는 보안 경계로 간주하지 않는다.
 - 세션이 없거나 만료되었거나 로그아웃으로 폐기되었으면 `401 UNAUTHORIZED`, 계정 비활성화나 역할 전부 회수로 폐기되었으면 `403 FORBIDDEN`으로 응답해 admin이 다시 로그인할지 접근 불가를 안내할지 구분하게 한다.
+- 관리자 요청의 세션 검사는 다음 순서로 하고, 처음 걸린 조건으로 응답한다. 폐기 사유를 만료보다 먼저 보아, 차단된 사용자가 만료 뒤에도 차단 사유를 안내받게 한다.
+  1. 쿠키가 없거나 알 수 없는 토큰 → `401 UNAUTHORIZED`
+  2. 폐기된 세션: 로그아웃 → `401 UNAUTHORIZED`, 역할 전부 회수·계정 비활성화 → `403 FORBIDDEN`
+  3. 만료된 세션 → `401 UNAUTHORIZED`
+  4. 계정 비활성 또는 역할 없음 → `403 FORBIDDEN`
+  5. 요청 API에 필요한 역할 없음 → `403 FORBIDDEN`
+- 로그아웃(`POST /api/admin/auth/logout`)은 예외로, 세션 상태와 관계없이 항상 `204`로 응답하고 쿠키를 만료시킨다.
 - 관리자 역할은 `ROLE_MANAGER`(권한 관리자), `CONTENT_EDITOR`(콘텐츠 편집자), `PUBLISHER`(게시 담당자)이며, 한 계정에 여러 역할을 부여할 수 있다.
 - 허용 Origin은 `http://localhost:3000`, `http://localhost:3001`이며 credential 요청을 허용한다.
 - 목록 API의 `page`는 0부터 시작하고, 기본 `size`는 20, 최대 100이다.
@@ -316,24 +323,21 @@ stub 계정으로 로그인하고 세션 쿠키를 발급한다. 계정은 동�
 
 ### `POST /api/admin/auth/logout`
 
-현재 세션을 폐기하고 쿠키를 만료시킨다.
+현재 세션을 폐기하고 쿠키를 만료시킨다. 세션이 없거나 만료되었거나 이미 폐기되었어도(로그아웃, 역할 전부 회수, 계정 비활성화) 같은 응답을 돌려주어, admin이 로그아웃 중 오류를 처리하지 않아도 되게 한다.
 
-- 권한: 로그인 계정
-- 성공: `204 NO CONTENT`, `Set-Cookie: local_session=; Max-Age=0; Path=/`
+- 권한: 없음 (세션 검사 순서를 적용하지 않음)
+- 성공: 항상 `204 NO CONTENT`, `Set-Cookie: local_session=; Max-Age=0; Path=/`
+- 부수 효과: 유효한 세션이면 `revoke_reason='LOGOUT'`으로 폐기한다. 이미 폐기된 세션의 사유는 바꾸지 않는다.
 
 요청:
 
 | 위치 | 필드 | 형식 | 필수 | 제약 |
 |---|---|---|:---:|---|
-| cookie | `local_session` | string | O | 유효한 세션 토큰 |
+| cookie | `local_session` | string | | 세션 토큰. 없어도 됨 |
 
 응답: body 없음
 
-오류:
-
-| 상태 | 코드 | 조건 |
-|---:|---|---|
-| 401 | `UNAUTHORIZED` | 세션 없음·만료·이미 로그아웃 |
+오류: 없음
 
 ## 5. 계정 및 역할 API
 
