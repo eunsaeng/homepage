@@ -8,29 +8,45 @@ import { runClaudeStage } from './claude-session.mjs';
 import { PROMPTS } from './prompts.mjs';
 import { getGitBase, git } from './git.mjs';
 import { buildWikiExcerpts, excerptsToMarkdown, indexWiki } from './wiki-context.mjs';
+import { applyWikiEdits } from './wiki-patch.mjs';
 import { createInitialState, loadState, saveIssueState, saveState, withStateLock } from './state.mjs';
-import { appendJsonLine, atomicWrite, ensureDir, parseJsonPayload, runProcess, safeId, sha256, writeStageMarkdown } from './util.mjs';
+import { appendJsonLine, atomicWrite, ensureDir, newId, parseJsonPayload, runProcess, safeId, sha256, writeStageMarkdown } from './util.mjs';
 
 const priorityRank = { P0: 0, P1: 1, P2: 2, P3: 3 };
 const commitIdentity = ['-c', 'user.name=Homepage Harness', '-c', 'user.email=harness@localhost'];
 let activeState = null;
 
+const MAX_SCHEMA_FAILURES = 3;
+
+// The model answered but not in the requested JSON shape; retried a few times, then treated as a human decision.
+class StageSchemaError extends Error {}
+
+// Thrown from deep inside a stage to stop the run with an alert; runHarness turns it into pause().
+export class StagePauseError extends Error {
+  constructor(reason, details) {
+    super(typeof details === 'string' ? details : details.message);
+    this.reason = reason;
+    this.details = details;
+  }
+}
+
 function jsonData(output, stage) {
   try { return parseJsonPayload(output); }
-  catch (error) { throw new Error(`${stage} must return a fenced JSON object: ${error.message}`); }
+  catch (error) { throw new StageSchemaError(`${stage} must return a fenced JSON object: ${error.message}`); }
 }
 
 function stageInput(title, sections) {
   return [`# ${title}`, '', ...sections.flatMap(([heading, body]) => [`## ${heading}`, '', body || '(none)', ''])].join('\n');
 }
 
-async function modelStage({ runDir, stage, model, prompt, cwd = runDir, edits = false, readOnly = false, disallowedTools, parseJson = true }) {
+export async function modelStage({ runDir, stage, model, prompt, cwd = runDir, edits = false, readOnly = false, disallowedTools, parseJson = true }) {
   if (activeState) {
     activeState.active_stages ??= {};
     activeState.active_stages[stage] = { model, status: 'RUNNING', started_at: new Date().toISOString() };
     await saveState(activeState);
   }
   let attempt = 0;
+  let schemaFailures = 0;
   while (true) {
     attempt += 1;
     const callStage = attempt === 1 ? stage : `${stage}/retry-${attempt}`;
@@ -46,7 +62,23 @@ async function modelStage({ runDir, stage, model, prompt, cwd = runDir, edits = 
       }
       return { ...response, data };
     } catch (error) {
-      const delayMs = Math.min(1_000 * (2 ** Math.min(attempt - 1, 8)), 5 * 60 * 1_000);
+      if (error instanceof StageSchemaError) {
+        schemaFailures += 1;
+        if (schemaFailures >= MAX_SCHEMA_FAILURES) {
+          if (activeState) {
+            activeState.active_stages[stage] = { model, status: 'FAILED', attempts: attempt, last_error: error.message };
+            await saveState(activeState);
+          }
+          throw new StagePauseError('UNRESOLVED', {
+            message: `Stage ${stage} returned output that does not match the requested JSON schema ${schemaFailures} times.`,
+            stage,
+            last_output: path.join(runDir, callStage, 'output.md'),
+            error: error.message,
+          });
+        }
+      }
+      // Schema errors retry quickly; process/network errors back off up to five minutes.
+      const delayMs = error instanceof StageSchemaError ? 1_000 : Math.min(1_000 * (2 ** Math.min(attempt - 1, 8)), 5 * 60 * 1_000);
       if (activeState) {
         activeState.active_stages[stage] = { model, status: 'RETRYING', attempts: attempt, last_error: error.message, next_retry_at: new Date(Date.now() + delayMs).toISOString() };
         await saveState(activeState);
@@ -363,6 +395,8 @@ function globRegex(glob) {
   return new RegExp(`^${escaped}$`);
 }
 
+const isWikiPath = (file) => /^wiki\/[^/]+\.md$/.test(file.replaceAll('\\', '/'));
+
 function pathAllowed(file, patterns) {
   const normalized = file.replaceAll('\\', '/').replace(/^\.\//, '');
   return patterns.some((pattern) => globRegex(pattern.replaceAll('\\', '/')).test(normalized));
@@ -434,7 +468,7 @@ async function buildDependencyBase(runDir, state, issue) {
   return { paused: false, baseSha: commitSha };
 }
 
-async function testCommandsFor(repository, worktree, ids) {
+export async function testCommandsFor(repository, worktree, ids) {
   const definitions = {
     'apps:test': { command: 'pwsh.exe', args: ['-NoProfile', '-File', path.join(worktree, 'scripts/gradle-api.ps1'), 'test'] },
     'web:typecheck': { command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args: ['--filter', 'web', 'exec', 'tsc', '--noEmit'] },
@@ -448,11 +482,41 @@ async function testCommandsFor(repository, worktree, ids) {
     const definition = definitions[id];
     if (!definition || !TEST_COMMANDS[repository].includes(id)) throw new Error(`Test command ${id} is not allowlisted for ${repository}.`);
     const env = { ...definition.env };
-    if (id === 'e2e:test') env.E2E_WEB_PORT = String(await allocatePort());
-    const result = await runProcess(definition.command, definition.args, { cwd: worktree, env, timeoutMs: 30 * 60 * 1000 });
-    results.push({ id, exit_code: result.code, stdout: result.stdout.slice(-12000), stderr: result.stderr.slice(-12000) });
+    const database = id === 'e2e:test' ? await createE2eDatabase() : null;
+    try {
+      if (database) {
+        // Playwright starts API, web and admin from this worktree on free ports against a fresh database.
+        Object.assign(env, database.env, {
+          E2E_WEB_PORT: String(await allocatePort()),
+          E2E_ADMIN_PORT: String(await allocatePort()),
+          E2E_API_PORT: String(await allocatePort()),
+        });
+      }
+      const result = await runProcess(definition.command, definition.args, { cwd: worktree, env, timeoutMs: 30 * 60 * 1000 });
+      results.push({ id, exit_code: result.code, stdout: result.stdout.slice(-12000), stderr: result.stderr.slice(-12000) });
+    } finally {
+      if (database) await database.drop();
+    }
   }
   return results;
+}
+
+// E2E runs get their own database in the local PostgreSQL container so parallel lanes and the developer's
+// data never share state. A setup failure is an infrastructure error, not a failed verification.
+async function createE2eDatabase() {
+  const container = process.env.HARNESS_POSTGRES_CONTAINER ?? 'homepage-postgres';
+  const user = process.env.DB_USERNAME ?? 'homepage';
+  const name = `homepage_e2e_${newId().replaceAll('-', '').slice(0, 12)}`;
+  const psql = (tool, ...args) => runProcess('podman', ['exec', container, tool, '-U', user, ...args], { timeoutMs: 60_000 });
+  const created = await psql('createdb', name);
+  if (created.code !== 0) throw new Error(`Could not create E2E database ${name} in container ${container}: ${created.stderr.trim()}`);
+  return {
+    env: {
+      DB_R2DBC_URL: `r2dbc:postgresql://localhost:5432/${name}`,
+      DB_JDBC_URL: `jdbc:postgresql://localhost:5432/${name}`,
+    },
+    drop: () => psql('dropdb', '--if-exists', '--force', name),
+  };
 }
 
 async function allocatePort() {
@@ -504,7 +568,43 @@ async function ensureWorktree(state, issue, baseSha) {
   return record;
 }
 
-async function processIssue(runDir, state, issue, specMarkdown, wikiExcerpts) {
+// Wiki slices never touch files through Claude: the session proposes section or requirement-line replacements
+// from the excerpts it was given, and the controller applies them. Rejected proposals are retried with the errors.
+async function applyWikiSlice({ runDir, state, issue, plan, slice, stage, wikiDir, excerptList, wikiExcerpts, feedback }) {
+  let rejected = '';
+  for (let proposal = 1; proposal <= MAX_SCHEMA_FAILURES; proposal += 1) {
+    const proposalStage = proposal === 1 ? stage : `${stage}/proposal-${proposal}`;
+    const response = await modelStage({
+      runDir,
+      stage: proposalStage,
+      model: MODELS.implement,
+      readOnly: true,
+      prompt: PROMPTS.wikiEdit(issue, plan.markdown ?? '', slice, wikiExcerpts, [feedback, rejected].filter(Boolean).join('\n\n')),
+    });
+    if (response.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', response.data.unresolved);
+    const edits = { sections: response.data.sections ?? [], requirementLines: response.data.requirement_lines ?? [] };
+    const touched = [...edits.sections.map((edit) => edit.path), ...(edits.requirementLines.length ? ['wiki/requirements.md'] : [])];
+    const notOwned = [...new Set(touched)].filter((file) => !(slice.paths ?? []).includes(file));
+    const result = notOwned.length
+      ? { changed: [], errors: notOwned.map((file) => `${file} is not owned by wiki slice ${slice.id}.`) }
+      : await applyWikiEdits(wikiDir, edits, excerptList);
+    await writeNamedArtifact(runDir, `${proposalStage}/wiki-edit.md`, [
+      `# Wiki slice ${slice.id}`,
+      '',
+      response.data.summary ?? '',
+      '',
+      `Changed: ${result.changed.join(', ') || '(none)'}`,
+      '',
+      'Rejected edits:',
+      result.errors.map((error) => `- ${error}`).join('\n') || '(none)',
+    ].join('\n'));
+    if (!result.errors.length) return { paused: false, changed: result.changed };
+    rejected = `Rejected edits (fix and resubmit):\n${result.errors.join('\n')}`;
+  }
+  return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, slice: slice.id, message: `Wiki edits were rejected ${MAX_SCHEMA_FAILURES} times.`, errors: rejected });
+}
+
+async function processIssue(runDir, state, issue, specMarkdown, item) {
   const record = state.issues[issue.id] ?? { status: 'READY', attempt: 0 };
   if (record.status === 'MR_READY') return { paused: false };
   const firstAttempt = record.status === 'REWORK_REQUIRED' ? record.attempt + 1 : Math.max(record.attempt || 1, 1);
@@ -518,7 +618,11 @@ async function processIssue(runDir, state, issue, specMarkdown, wikiExcerpts) {
   await saveState(state);
   const repoCwd = work.worktree;
   const inventory = await git(work.worktree, ['ls-files', issue.primary_repository]);
-  const planPrompt = `${PROMPTS.implementationPlan(issue, specMarkdown, wikiExcerpts, inventory.stdout)}\n\nReturn JSON: {"markdown":"# Implementation plan ...","slices":[{"id":"...","goal":"...","paths":["..."]}],"allowed_paths":["..."] ,"test_ids":["..."],"unresolved":[]}.`;
+  // Excerpts come from the worktree so they include wiki changes merged from predecessor issues.
+  const wikiDir = path.join(work.worktree, 'wiki');
+  let excerptList = await buildWikiExcerpts(item, await indexWiki(wikiDir));
+  let wikiExcerpts = excerptsToMarkdown(excerptList);
+  const planPrompt = `${PROMPTS.implementationPlan(issue, specMarkdown, wikiExcerpts, inventory.stdout)}\n\nReturn JSON: {"markdown":"# Implementation plan ...","slices":[{"id":"...","kind":"code|wiki","goal":"...","paths":["..."]}],"allowed_paths":["..."] ,"test_ids":["..."],"unresolved":[]}.`;
   let plan;
   let planFeedback = '';
   for (let planAttempt = 1; planAttempt <= 3; planAttempt += 1) {
@@ -531,6 +635,14 @@ async function processIssue(runDir, state, issue, specMarkdown, wikiExcerpts) {
     for (const slice of plan.slices ?? []) {
       if (!Array.isArray(slice.paths) || slice.paths.length === 0) sliceErrors.push(`Slice ${slice.id ?? 'unknown'} has no owned paths.`);
       if ((slice.paths?.length ?? 0) > 5) sliceErrors.push(`Slice ${slice.id ?? 'unknown'} owns more than five paths.`);
+      const wikiPaths = (slice.paths ?? []).filter(isWikiPath);
+      if ((slice.kind ?? 'code') === 'wiki') {
+        if (wikiPaths.length !== (slice.paths?.length ?? 0)) sliceErrors.push(`Wiki slice ${slice.id ?? 'unknown'} may only own wiki/*.md paths.`);
+      } else if (slice.kind !== undefined && slice.kind !== 'code') {
+        sliceErrors.push(`Slice ${slice.id ?? 'unknown'} has unknown kind ${slice.kind}.`);
+      } else if (wikiPaths.length) {
+        sliceErrors.push(`Code slice ${slice.id ?? 'unknown'} owns wiki paths; move them to a slice of kind "wiki".`);
+      }
     }
     const slicePathOwners = new Map();
     for (const slice of plan.slices ?? []) {
@@ -565,27 +677,35 @@ async function processIssue(runDir, state, issue, specMarkdown, wikiExcerpts) {
     record.attempt = attempt;
     record.status = 'IMPLEMENTING';
     state.issues[issue.id] = record;
-    state.active_issue_ids = [issue.id];
     await saveIssueState(issue.id, record);
     await saveState(state);
     for (const slice of slices) {
       const slicePaths = slice.paths?.length ? slice.paths : allowedPaths;
-      const implementation = await modelStage({
-        runDir,
-        stage: `issues/${issue.id}/iterations/${String(attempt).padStart(2, '0')}/implementation/${safeId(slice.id)}`,
-        model: MODELS.implement,
-        cwd: repoCwd,
-        edits: true,
-        disallowedTools: ['Read(wiki/**)', 'Grep(wiki/**)', 'Glob(wiki/**)'],
-        prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"unresolved":[]}.`,
-      });
-      await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/implementation/${safeId(slice.id)}/implementation.md`, implementation.output);
+      const sliceStage = `issues/${issue.id}/iterations/${String(attempt).padStart(2, '0')}/implementation/${safeId(slice.id)}`;
+      if (slice.kind === 'wiki') {
+        const applied = await applyWikiSlice({ runDir, state, issue, plan, slice, stage: sliceStage, wikiDir, excerptList, wikiExcerpts, feedback: record.feedback ?? '' });
+        if (applied.paused) return applied;
+        excerptList = await buildWikiExcerpts(item, await indexWiki(wikiDir));
+        wikiExcerpts = excerptsToMarkdown(excerptList);
+      } else {
+        const implementation = await modelStage({
+          runDir,
+          stage: sliceStage,
+          model: MODELS.implement,
+          cwd: repoCwd,
+          edits: true,
+          disallowedTools: ['Read(wiki/**)', 'Grep(wiki/**)', 'Glob(wiki/**)', 'Edit(wiki/**)', 'Write(wiki/**)'],
+          prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"unresolved":[]}.`,
+        });
+        await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/implementation/${safeId(slice.id)}/implementation.md`, implementation.output);
+      }
       const changed = await changedPaths(work.worktree);
       const violations = changed.filter((file) => !pathAllowed(file, [...slicePaths, ...allowedPaths]));
       if (violations.length) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, message: 'Worker edited paths outside the approved allowlist.', files: violations });
     }
 
-    const diff = await getDiff(work.worktree, state.base_sha);
+    // Diff against this issue's own base so predecessor commits merged into it are not reviewed again.
+    const diff = await getDiff(work.worktree, record.base_sha);
     const testPlan = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/test-plan`, model: MODELS.testPlan, prompt: `${PROMPTS.testPlan(issue, plan.markdown ?? '', diff, tests.map((id) => ({ id })))}\n\nSelect every relevant allowed test id. Return JSON: {"test_ids":["..."],"rationale":"...","unresolved":[]}.` });
     if (testPlan.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', testPlan.data.unresolved);
     const testIds = testPlan.data.test_ids?.length ? testPlan.data.test_ids : tests;
@@ -647,7 +767,6 @@ async function processIssue(runDir, state, issue, specMarkdown, wikiExcerpts) {
     record.mr_path = mrPath;
     record.completed_at = new Date().toISOString();
     state.issues[issue.id] = record;
-    state.active_issue_ids = [];
     await saveIssueState(issue.id, record);
     await saveState(state);
     return { paused: false };
@@ -709,9 +828,11 @@ async function createSpecIssuesAndRun(runDir, state, item, wikiIndex, allItems) 
     await writeNamedArtifact(runDir, `selection/${waveId}/worktree-plan.md`, `# READY issue wave\n\n${worktreePlan}`);
     state.active_issue_ids = selected.map((issue) => issue.id);
     await saveState(state);
-    const issueWikiExcerpts = excerptsToMarkdown(await buildWikiExcerpts(item, wikiIndex));
-    const results = await Promise.all(selected.map((issue) => processIssue(runDir, state, issue, specResult.specMarkdown, issueWikiExcerpts)));
-    const paused = results.find((result) => result.paused);
+    // Let every lane reach a checkpoint before stopping, so one lane's pause or error does not orphan the others.
+    const settled = await Promise.allSettled(selected.map((issue) => processIssue(runDir, state, issue, specResult.specMarkdown, item)));
+    const failure = settled.find((result) => result.status === 'rejected');
+    if (failure) throw failure.reason;
+    const paused = settled.map((result) => result.value).find((result) => result.paused);
     if (paused) return paused;
     for (const issue of selected) completed.add(issue.id);
     await writeNamedArtifact(runDir, `selection/${waveId}/next-selection.md`, `# Next selection checkpoint\n\nCompleted wave: ${selected.map((issue) => issue.id).join(', ')}\n\nRemaining in DAG: ${[...currentIssueIds].filter((id) => !completed.has(id)).join(', ') || '(none)'}`);
@@ -739,6 +860,7 @@ export async function runHarness({ resume = false } = {}) {
     await saveState(state);
     const runDir = path.join(RUNS_DIR, state.run_id);
     await ensureDir(runDir);
+    try {
     const baseSha = await bootstrapRepository(runDir, state);
     if (typeof baseSha !== 'string') return baseSha;
     state.base_sha = baseSha;
@@ -766,6 +888,10 @@ export async function runHarness({ resume = false } = {}) {
       if (result.paused) return result;
       state.active_backlog_id = null;
       await saveState(state);
+    }
+    } catch (error) {
+      if (error instanceof StagePauseError) return pause(runDir, state, error.reason, error.details);
+      throw error;
     }
     });
   } finally {

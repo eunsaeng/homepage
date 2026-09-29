@@ -8,6 +8,8 @@
 
 하네스는 외부 Git hosting의 PR/MR을 만들지 않는다. Remote가 없는 현재 저장소에서는 branch, commit, MR 설명 Markdown으로 local MR을 표현한다.
 
+구현 위치는 `scripts/harness`(Node ESM)이며 `pnpm harness <validate [--fix]|status|run|resume>`로 실행한다. 단계별 모델은 `lib/config.mjs`, 상태 기계는 `lib/pipeline.mjs`, 단계 프롬프트는 `lib/prompts.mjs`에 있다. 현재 구현과 이 계획의 차이는 14절에 정리한다.
+
 ## 2. Backlog 입력과 wiki context 제한
 
 ### Backlog 기준
@@ -16,6 +18,8 @@
 - 파일 경로에서 결정론적으로 `backlog_id`를 만든다. 예: `request-apps-local-account-contract.md` → `BL-apps-local-account-contract`.
 - **backlog item 1개당 Spec 정확히 1개**를 생성한다. 한 Spec은 이후 여러 Development Issue로 분해될 수 있다.
 - 입력 파서는 `Primary repository`, `Request type`, `Status`, `근거`, `UNRESOLVED`, `구현 의존성` heading을 추출하고 source file hash를 기록한다.
+- `requirements/deferred/`의 요청은 backlog에 넣지 않는다. 외부 결정이 필요한 요청(현재 DAOU Office 실제 동기화)을 보류해 run이 초반에 멈추지 않게 하며, 요구사항 인용 여부 확인에만 사용한다.
+- `pnpm harness validate`는 run 전에 요청 문서를 결정론적으로 검사한다: 파일명 `request-<primary repo>-<title>.md`, 인용 heading·행 범위 일치(heading 행부터 ID 행까지), 의존 방향(apps → admin/web → e2e), 모든 요구사항 ID 인용, 여러 repository에 걸친 기능의 apps·e2e 요청 존재. 결과와 요청별 근거 추적은 `.harness/preflight/`에 남긴다. `wiki/requirements.md` 행이 바뀌면 `validate --fix`가 인용을 다시 맞춘다.
 - 현재 요청 파일에는 명시 priority가 없으므로 backlog index의 독립 Sonnet 세션이 item마다 P0~P3과 근거를 먼저 제안한다. Spec 생성 Opus는 이 값을 입력으로 사용하며 임의로 재정렬하지 않는다. 기존 `구현 의존성`은 선행 관계로 가져오고, 새 관계는 Spec에서 근거와 함께 제안한다.
 - priority 의미는 P0=차단/보안, P1=핵심 사용자 경로, P2=지원 경로, P3=후속 개선으로 고정한다. 동률은 dependency depth, backlog ID 사전순으로 정렬한다.
 
@@ -27,6 +31,16 @@
 - 발췌문은 `inputs/wiki-excerpts.md`와 `inputs/manifest.md`에 원본 경로·heading·line range·SHA-256으로 기록한다.
 - section 범위 계산은 다음 heading 직전까지로 결정론적으로 제한하고, `wiki/requirements.md` 전체 파일 read를 금지하는 테스트를 둔다.
 - `rg`가 없을 때는 동등한 line-number-aware PowerShell/Python extractor를 사용하되 전체 본문 dump fallback은 허용하지 않는다.
+- 모든 Claude 세션은 `Read/Grep/Glob(wiki/**)`가 금지된다. wiki 내용은 controller가 만든 발췌로만 전달한다.
+
+요구사항 접두어별로 전달하는 발췌 section은 `lib/wiki-context.mjs`가 고정한다.
+
+| 요청이 인용한 ID | 발췌 section |
+|---|---|
+| 모든 요청 | `requirements.md`의 인용 행 범위, `api-spec.md` 「공통 규칙」 |
+| `ACC-*` | `architecture.md` 「로컬 계정 및 권한 처리」, `api-spec.md` 「로컬 stub 인증 API」·「계정 및 역할 API」, `erd.md` `account`·`app_role`·`account_role`·`account_sync_run`·`admin_session` |
+| `CMS-*` | `architecture.md` 「API 및 데이터 흐름」, `api-spec.md` 「공통 데이터 형식」·「관리자 콘텐츠 API」, `erd.md` `content_page`·`content_revision` |
+| `WEB-*` | `architecture.md` 「애플리케이션 책임」, `api-spec.md` 「공개 API」·「관리자 메뉴 API」, `erd.md` `content_page`·`navigation_item` |
 
 ## 3. 전체 파이프라인
 
@@ -68,17 +82,17 @@ flowchart TD
 | Backlog index/triage | Sonnet | backlog request 1건, request dependency link, wiki heading/ID index | `backlog-index.md`; ID·priority 제안·dependencies·source hash. 요청 파일 전체를 읽더라도 wiki 전체는 입력하지 않음 |
 | Backlog 선택 | Sonnet | backlog index ledger, 처리 상태, backlog dependency DAG | `selection.md`; 최상위 eligible item과 선택 근거. Controller가 READY/priority를 재검증 |
 | Spec 생성 | Opus | backlog request 1건, 관련 wiki 발췌 | `spec.md`; 목표, acceptance criteria, priority, dependencies, 영향 repo, 위험, `UNRESOLVED` |
-| Spec 승인 | Sonnet | `spec.md`, 관련 발췌, 자동 승인 규칙 | `approval-review.md`; unresolved/risk 검사. unresolved가 없고 schema 검증 통과 시 controller가 `AUTO_APPROVED` 기록 |
+| Spec 승인 | Sonnet | `spec.md`, 관련 발췌, 자동 승인 규칙 | `approval-review.md`; unresolved/risk 검사. unresolved가 없고 schema 검증 통과 시 controller가 `AUTO_APPROVED` 기록. `REQUEST_CHANGES`면 Opus가 Spec을 고쳐 다시 검토하며, 3회 안에 승인되지 않으면 `PAUSED_UNRESOLVED` |
 | Issue 생성 | Opus | 승인 Spec 1건, repo 책임, 요청 문서 선후관계 | `issues.md`; repo별 변경 1개인 issue 목록, priority, dependencies, AC, 허용 path |
 | Issue DAG | Haiku | `issues.md`, upstream issue links | `issue-dag.md`; 정점, edge, cycle 검사 결과, READY 집합 |
 | READY 선택/worktree | Sonnet | DAG, repo lane별 READY 목록, Git base SHA | `worktree-plan.md`; 선정 issue와 branch/worktree 정보. Git 생성은 controller 수행 |
 | 구현계획 | Opus | issue, 관련 wiki section, 코드 base SHA | `implementation-plan.md`; 작은 worker slices, path allowlist, 테스트, wiki 변경 계획, 순서 |
-| 계획 Review | Sonnet | 승인 Spec, issue, 계획, wiki 발췌 | `plan-review.md`; 누락 AC·파일 폭·권한·문서 영향 및 승인 상태 |
+| 계획 Review | Sonnet | 승인 Spec, issue, 계획, wiki 발췌 | `plan-review.md`; 누락 AC·파일 폭·권한·문서 영향 및 승인 상태. 변경 요청이면 계획을 다시 작성하며, 3회 안에 승인되지 않으면 `PAUSED_UNRESOLVED`. 이 반복은 구현 iteration 수에 포함하지 않음 |
 | Implement | Sonnet | 승인 plan slice와 issue, 필요한 코드/wikis excerpt | `implementation.md`; 변경 요약, 실제 변경 경로, 가정 및 자기검증 |
 | 실제 Test/Verify | Haiku | issue AC, plan test matrix, 변경 요약 | `test-plan.md` 및 `verification.md`; controller가 실제 명령 실행 후 exit code·결과를 기록 |
 | 독립 Review | Sonnet | Spec, issue, 승인 plan, diff, 실제 test artifact, wiki 발췌 | `code-review.md`; finding, severity, 파일 위치, 승인 또는 변경 요청 |
 | Local MR 생성 | Haiku | 승인 review, 검증 결과, diff/stat, issue | `local-mr.md`; 제목·요약·검증·source/target branch. Git branch/commit/ref는 controller가 확인 |
-| 다음 READY 선택 | Sonnet | 최신 state, issue DAG, backlog index, 완료 MR artifact | `next-selection.md`; 다음 issue, 다음 backlog Spec 또는 `QUEUE_DRAINED` |
+| 다음 READY 선택 | Controller | 최신 state, issue DAG, backlog index, 완료 MR artifact | `next-selection.md`; 완료 wave와 남은 issue. 다음 wave 선택은 READY 선택 stage가, 다음 backlog 선택은 Backlog 선택 stage가 이어서 수행 |
 
 Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리한다. Spec·Issue·구현계획 생성만 Opus, DAG·Test 계획·local MR 본문은 Haiku, 나머지 분석·Review·선택 stage는 Sonnet을 사용한다. stage별 `claude -p` 실행에는 모델, prompt hash, session ID, 종료 코드가 남는다.
 
@@ -90,8 +104,9 @@ Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리�
 - `READY`는 모든 predecessor issue가 검증·독립 Review 승인을 완료하고 `MR_READY`가 된 issue다.
 - 동시 실행은 **repo lane별**로 관리한다. 매 scheduling wave에서 각 repo의 READY issue 중 priority가 가장 높은 것 최대 1개를 선택해 apps/web/admin/e2e worker를 동시에 실행한다. 같은 repo issue는 동시 write하지 않는다. DAG predecessor가 READY가 아니면 소비자 issue는 대기한다.
 - 단일 issue 계획은 package, layer, 화면 단위의 worker slice로 분리한다. slice마다 명시적 파일 allowlist와 완료조건을 갖고, 기본 source 변경 폭은 5개 파일 이내로 제한한다. 초과하면 slice를 더 나눈다.
-- 같은 repo의 slice들은 파일 소유권이 겹치지 않을 때만 병렬 실행한다. 각 slice는 격리 worktree에서 작업하고, controller가 issue integration branch에 순서대로 통합한다. 충돌은 독립 Sonnet integration session으로 해결하고 다시 테스트·Review한다.
+- 한 issue의 slice는 issue worktree 하나에서 계획 순서(`depends_on`)대로 **순차 실행**한다. slice마다 새 Implement 세션을 쓰고, 세션이 끝날 때마다 controller가 변경 경로가 slice·issue allowlist 안인지 확인한다. slice 병렬화는 같은 repo 안의 통합 충돌 비용이 커서 채택하지 않는다. 병렬성은 repo lane(apps/web/admin/e2e) 단위로 확보한다.
 - 구현계획에는 코드와 함께 변경 가능성이 있는 `requirements`, `architecture`, `api-spec`, `erd` section을 모두 식별한다. 실제 변경이 불필요하면 이유를 적고 파일을 수정하지 않는다.
+- wiki 변경은 코드 slice와 분리된 **wiki slice**로 계획한다. 세션은 wiki 파일을 읽을 수 없으므로, wiki slice 세션은 발췌된 section과 계획만 받아 `{path, heading, markdown}` 형식의 section 교체안을 반환하고, controller가 heading index로 해당 section 범위만 결정론적으로 교체한다. 교체는 발췌로 전체가 전달된 section만, heading 행을 바꾸지 않는 경우에만 허용한다. `wiki/requirements.md`는 발췌가 절 일부이므로 요구사항 ID 한 줄 단위 교체만 허용하고 새 ID 추가는 허용하지 않는다. 한 줄 교체라 다른 행 번호와 요청 문서 인용은 바뀌지 않는다. 교체안이 규칙을 어기면 거부 사유를 붙여 최대 3회 다시 요청하고, 그래도 거부되면 `PAUSED_UNRESOLVED`로 멈춘다(`lib/wiki-patch.mjs`).
 
 ## 6. 구현·검증·독립 Review 반복 규칙
 
@@ -110,7 +125,7 @@ Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리�
 - Review 승인 후 controller가 allowlist 경로만 stage하고 issue 단위 commit을 생성한다. commit message에는 backlog ID와 issue ID를 넣는다.
 - Local MR은 `.harness/runs/<run-id>/merge-requests/<issue-id>.md` 및 로컬 source branch로 표현한다. remote push, GitHub/GitLab API 호출은 하지 않는다.
 - DAG dependency는 upstream의 `MR_READY`와 해당 source branch를 기록한다. downstream worktree base는 필요한 predecessor branch를 통합한 local integration SHA다.
-- 현재 저장소는 `main`만 있고 첫 commit이 없다. 최초 run의 bootstrap stage는 workspace inventory로 명시적 baseline path manifest를 만들고, manifest에 든 경로만 controller가 stage해 초기 commit을 자동 생성한다. `git add .`는 금지한다. manifest로 목적을 판별할 수 없는 untracked 파일이 있으면 이를 `UNRESOLVED`로 저장하고 멈춘다. baseline commit 완료 후에만 issue worktree를 만든다.
+- `main`에 commit이 있으면 bootstrap은 현재 `HEAD`를 base로 사용한다(현재 저장소는 초기 commit `chore: bootstrap homepage CMS workspace`가 있다). commit이 없는 저장소에서는 최초 run의 bootstrap stage가 workspace inventory로 명시적 baseline path manifest를 만들고, manifest에 든 경로만 controller가 stage해 초기 commit을 자동 생성한다. `git add .`는 금지한다. manifest로 목적을 판별할 수 없는 untracked 파일이 있으면 이를 `UNRESOLVED`로 저장하고 멈춘다. baseline commit 완료 후에만 issue worktree를 만든다.
 - remote MR 게시가 필요한 경우 별도의 adapter와 credential 설계를 추가하고, 이 계획의 local MR 기능과 분리한다.
 
 ## 8. State, 재개, 중복 방지
@@ -176,14 +191,20 @@ Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리�
     issues/<issue-id>/iterations/01/verification.md
     issues/<issue-id>/merge-request/{input,output}.md
     issues/<issue-id>/merge-request/local-mr.md
+    issues/<issue-id>/iterations/<n>/implementation/<slice-id>/{input,output}.md
+    issues/<issue-id>/iterations/<n>/test/commands/<test-id>.log
+    merge-requests/<issue-id>.md
+    <stage>/session.json
     logs/<stage>/<session-id>.jsonl
     logs/<stage>/<session-id>.stderr.log
-    logs/controller.log
+    logs/controller.jsonl
 ```
+
+각 모델 stage directory의 `session.json`에는 model, session ID, input SHA-256, exit code가 남는다. 같은 stage를 같은 입력으로 다시 실행하면 저장된 `output.md`를 재사용하므로, `resume`은 완료된 모델 호출을 반복하지 않는다.
 
 각 모델 호출은 markdown input/output 이외에 raw JSONL/stdout/stderr를 별도 저장한다. Controller의 Git·테스트 실행도 stage별 `.log`와 exit code를 저장한다. 각 output에는 사용 model, stage, timestamp, source artifact hash, reviewer result를 front matter 또는 표준 header로 기록한다.
 
-    `.harness/` runtime state, artifacts, logs는 로컬에서 재개 가능하도록 보존하되 Git source commit에는 포함하지 않는다. 장기 보존/export는 별도 backup 기능으로 처리한다.
+`.harness/` runtime state, artifacts, logs는 로컬에서 재개 가능하도록 보존하되 Git source commit에는 포함하지 않는다. 장기 보존/export는 별도 backup 기능으로 처리한다.
 
 중단 알림은 `.harness/alerts/<run-id>-<reason>.md`에 질문, 관련 Spec/Issue, 관련 input excerpt와 재개 방법을 기록한다. 알림은 전체 wiki를 복제하지 않는다.
 
@@ -204,6 +225,8 @@ Spec은 다음을 모두 만족하면 승인 요청 없이 `AUTO_APPROVED`로 �
 2. issue의 세 번째 Implement/Test/Review iteration까지 독립 Review 승인을 받지 못하면 state와 세 번의 review findings를 저장하고 알린다.
 
 Claude 인증/네트워크, Git lock, 테스트 인프라 오류는 사용자 결정 상태로 바꾸지 않는다. backoff 후 자동 재시도하고, 재시도 중에도 checkpoint/log를 보존한다. 수동 중지 후에는 `resume`으로 재개한다.
+
+모델 출력이 요청한 JSON schema를 따르지 않는 오류는 인프라 오류와 구분한다. 같은 stage에서 3회 연속 발생하면 무한 재시도하지 않고 `PAUSED_UNRESOLVED`로 멈추며, 마지막 출력 경로를 알림에 남긴다.
 
 ## 11. 보안 및 변경 경계
 
@@ -234,3 +257,25 @@ Claude 인증/네트워크, Git lock, 테스트 인프라 오류는 사용자 �
 - local MR 산출물 이후 다음 READY issue를 자동 선택한다.
 - 강제 종료 뒤 state만으로 마지막 완료 stage 다음부터 재개한다.
 - 관련 wiki 문서 전체가 어떤 Claude context에도 포함되지 않았음을 input manifest/log로 입증한다.
+
+## 14. 구현 현황과 남은 작업
+
+`scripts/harness` 구현은 1~13절의 흐름을 갖췄다: 단계별 독립 `claude -p` 세션과 모델 매핑, wiki 부분 발췌, 자동 Spec 승인과 수정 반복, issue DAG 검증, repo lane 병렬 wave, 구현계획·계획 Review, code/wiki slice, 최대 3회 구현·검증·Review, controller 테스트 실행, local MR, 파일 state·lock·재개, 단계별 input/output·session·log 기록, 요청 문서 사전 검사.
+
+다음 항목은 계획과 맞지 않던 부분을 고친 기록이다.
+
+| 항목 | 이전 동작 | 현재 동작 |
+|---|---|---|
+| wiki 변경 적용 | Implement 세션이 `wiki/**`를 읽을 수 없어 계획된 wiki 변경을 적용하지 못했다 | wiki slice가 section 교체안을 반환하고 controller가 적용(5절). 발췌는 issue worktree 기준으로 만들어 선행 issue의 wiki 변경을 반영 |
+| 병렬 lane 상태 | 각 lane이 `active_issue_ids`를 자기 issue로 덮어썼다 | wave만 `active_issue_ids`를 관리. lane 하나가 멈추거나 실패해도 나머지 lane이 checkpoint까지 진행한 뒤 멈춤 |
+| schema 오류 재시도 | JSON schema 오류도 무한 backoff 재시도했다 | 3회 연속이면 `PAUSED_UNRESOLVED`(10절) |
+| e2e 검증 환경 | `web`만 띄워 관리자·API가 필요한 E2E를 검증할 수 없었다 | Playwright가 API·web·admin을 모두 띄운다. 하네스는 실행마다 빈 포트와 전용 DB(`homepage_e2e_*`, 실행 후 삭제)를 할당 |
+| Windows 명령 실행 | Node가 shell 없이 `pnpm.cmd`를 실행하지 못해 worktree 설치와 web·admin·e2e 검증이 모두 실패했다 | `.cmd`/`.bat`은 `cmd.exe`로 인수를 인용해 실행 |
+| Review diff 기준 | run base 기준 diff라 선행 issue 변경까지 Review 대상에 섞였다 | issue 자신의 base 기준 diff |
+
+남은 작업:
+
+| 항목 | 현재 동작 | 필요한 변경 |
+|---|---|---|
+| wave 대기 | 한 wave의 모든 lane이 끝나야 다음 wave를 선택해, 빠른 lane이 느린 lane을 기다린다 | lane별 완료 즉시 다음 READY issue를 채우는 스케줄러(선택 사항) |
+| 전체 run 검증 | 단계 단위 테스트와 e2e 실행 경로는 검증했지만 실제 `claude`로 backlog 하나를 끝까지 돌린 기록은 없다 | 작은 backlog 하나로 `pnpm harness run` 시험 실행 후 산출물·로그 점검 |

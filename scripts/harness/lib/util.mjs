@@ -37,13 +37,23 @@ export function parseJsonPayload(markdown) {
   return JSON.parse(candidate.slice(first, last + 1));
 }
 
+// Node refuses to spawn Windows batch files (pnpm.cmd) without a shell, so they run through cmd.exe with
+// each argument quoted.
+function windowsBatchInvocation(command, args) {
+  const quote = (value) => (/^[\w@%+=:,./\\-]+$/.test(value) ? value : `"${value.replaceAll('"', '""')}"`);
+  return { command: process.env.ComSpec ?? 'cmd.exe', args: ['/d', '/s', '/c', `"${[command, ...args].map(quote).join(' ')}"`] };
+}
+
 export function runProcess(command, args, options = {}) {
   const { cwd, env, timeoutMs = 30 * 60 * 1000, input } = options;
+  const batch = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(command);
+  const invocation = batch ? windowsBatchInvocation(command, args) : { command, args };
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = spawn(invocation.command, invocation.args, {
       cwd,
       env: { ...process.env, ...env },
       windowsHide: true,
+      windowsVerbatimArguments: batch,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '';

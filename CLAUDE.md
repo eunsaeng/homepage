@@ -39,7 +39,7 @@ pnpm --filter admin exec tsc --noEmit
 pnpm --filter web build
 pnpm --filter admin build
 .\scripts\gradle-api.ps1 test
-pnpm test:e2e                    # starts `web` dev server itself unless E2E_EXTERNAL_WEB=true
+pnpm test:e2e                    # starts API (bootRun), web and admin itself, reusing ones already running; E2E_EXTERNAL_SERVERS=true skips starting
 pnpm test:harness                # node:test suite for scripts/harness
 ```
 
