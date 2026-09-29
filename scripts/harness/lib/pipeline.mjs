@@ -516,7 +516,7 @@ async function buildDependencyBase(runDir, state, issue) {
 
 export async function testCommandsFor(repository, worktree, ids) {
   const definitions = {
-    'apps:test': { command: 'pwsh.exe', args: ['-NoProfile', '-File', path.join(worktree, 'scripts/gradle-api.ps1'), 'test'] },
+    'apps:test': { command: 'pwsh.exe', args: ['-NoProfile', '-File', path.join(worktree, 'scripts/gradle-api.ps1'), 'test', '--rerun'] },
     'web:typecheck': { command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args: ['--filter', 'web', 'exec', 'tsc', '--noEmit'] },
     'web:build': { command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args: ['--filter', 'web', 'build'] },
     'admin:typecheck': { command: process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', args: ['--filter', 'admin', 'exec', 'tsc', '--noEmit'] },
