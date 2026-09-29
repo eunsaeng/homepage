@@ -24,7 +24,7 @@
 - 허용 Origin은 `http://localhost:3000`, `http://localhost:3001`이며 credential 요청을 허용한다.
 - 목록 API의 `page`는 0부터 시작하고, 기본 `size`는 20, 최대 100이다.
 - 요청 표의 `위치`는 `path`, `query`, `cookie`, `body`(JSON) 중 하나다. 필수가 아닌 항목은 생략할 수 있다.
-- 쓰기 요청 body에 정의되지 않은 필드가 있으면 `400 BAD_REQUEST`로 거부한다.
+- 쓰기 요청 body에 정의되지 않은 필드가 있으면 `400 BAD_REQUEST`로 거부한다. 이때 `error.fields`는 빈 배열이다(`fields`는 `422 VALIDATION_FAILED`에서만 채운다).
 
 ### 공통 오류 응답
 
