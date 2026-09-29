@@ -1,6 +1,6 @@
 import { mkdir, readdir, readFile, rm } from 'node:fs/promises';
 import path from 'node:path';
-import { HARNESS_DIR } from './config.mjs';
+import { HARNESS_DIR, MAX_REVIEW_ITERATIONS } from './config.mjs';
 import { atomicWrite, sha256 } from './util.mjs';
 
 // The dashboard never writes run state directly: the running orchestrator keeps state in memory and would
@@ -32,6 +32,15 @@ export function applyCommand(state, command) {
       const issue = state.issues?.[command.issue_id];
       if (!issue) return reject(`Unknown issue ${command.issue_id}.`);
       issue.pinned = Boolean(command.pinned);
+      return { status: 'applied' };
+    }
+    case 'retry-issue': {
+      // After REVIEW_LIMIT: allow another MAX_REVIEW_ITERATIONS iterations, keeping the worktree and review feedback.
+      const issue = state.issues?.[command.issue_id];
+      if (!issue) return reject(`Unknown issue ${command.issue_id}.`);
+      const limit = issue.max_attempts ?? MAX_REVIEW_ITERATIONS;
+      if (issue.status !== 'REWORK_REQUIRED' || (issue.attempt ?? 0) < limit) return reject('Only an issue that used all its review iterations can be retried.');
+      issue.max_attempts = limit + MAX_REVIEW_ITERATIONS;
       return { status: 'applied' };
     }
     case 'resolve-question': {

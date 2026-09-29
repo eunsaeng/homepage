@@ -220,7 +220,10 @@ export function HarnessDashboard() {
             </div>
             {selectedId && (issueDetail.data?.issue.id === selectedId ? (
               <IssueDetailView key={selectedId} detail={issueDetail.data} pinned={pinnedOf(issueDetail.data.issue)} pinPending={Boolean(latestPin(selectedId))}
-                onTogglePin={() => togglePin(issueDetail.data!.issue)} openStages={openStages} onToggleStage={toggleStage}
+                onTogglePin={() => togglePin(issueDetail.data!.issue)}
+                retryPending={pending.some((command) => command.type === "retry-issue" && command.issueId === selectedId)}
+                onRetry={() => { void sendCommand({ type: "retry-issue", issueId: selectedId }).then(refreshAll, (caught: unknown) => setActionError(caught instanceof Error ? caught.message : String(caught))); }}
+                openStages={openStages} onToggleStage={toggleStage}
                 onSelectRequirement={(id) => select("requirements", id)} />
             ) : <p className="text-sm text-zinc-500">{issueDetail.error ?? "불러오는 중…"}</p>)}
           </>

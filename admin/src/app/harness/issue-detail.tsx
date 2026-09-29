@@ -8,12 +8,14 @@ type Props = {
   pinned: boolean;
   pinPending: boolean;
   onTogglePin: () => void;
+  retryPending: boolean;
+  onRetry: () => void;
   openStages: Set<string>;
   onToggleStage: (id: string) => void;
   onSelectRequirement: (id: string) => void;
 };
 
-export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, openStages, onToggleStage, onSelectRequirement }: Props) {
+export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retryPending, onRetry, openStages, onToggleStage, onSelectRequirement }: Props) {
   const { issue, steps, stages } = detail;
   const done = issue.status === "MR_READY";
   return (
@@ -37,6 +39,16 @@ export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, openS
         </p>
         <button type="button" onClick={() => onSelectRequirement(issue.backlogId)} className="text-xs text-blue-700 underline">{issue.backlogId}</button>
       </header>
+
+      {issue.status === "REWORK_REQUIRED" && issue.displayStatus === "WAITING_FOR_HUMAN" && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <span className="flex-1">구현↔리뷰 반복 한도를 모두 사용했습니다. 마지막 리뷰 지적을 입력으로 3회 더 반복하거나, 처리 로그의 코드 리뷰를 확인하세요.</span>
+          <button type="button" disabled={retryPending} onClick={onRetry}
+            className="rounded bg-amber-600 px-3 py-1.5 font-medium text-white hover:bg-amber-700 disabled:opacity-50">
+            {retryPending ? "재시도 요청됨 · 하네스 재개 시 반영" : "3회 더 반복"}
+          </button>
+        </div>
+      )}
 
       <Section title="단계 진행"><Stepper steps={steps} /></Section>
 

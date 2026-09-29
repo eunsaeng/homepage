@@ -53,6 +53,14 @@ test('pins toggle and unknown targets are rejected', () => {
   assert.equal(applyCommand(current, { type: 'resolve-question', backlog_id: 'BL-a', question_id: 'nope', answer: 'x' }).status, 'rejected');
 });
 
+test('an issue that hit the review limit gets three more iterations', () => {
+  const current = state();
+  current.issues['BL-done--x'] = { status: 'REWORK_REQUIRED', attempt: 3 };
+  assert.equal(applyCommand(current, { type: 'retry-issue', issue_id: 'BL-done--x' }).status, 'applied');
+  assert.equal(current.issues['BL-done--x'].max_attempts, 6);
+  assert.equal(applyCommand(current, { type: 'retry-issue', issue_id: 'BL-done--x' }).status, 'rejected');
+});
+
 test('command files are applied in order and archived with their result', async () => {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'harness-commands-'));
   try {

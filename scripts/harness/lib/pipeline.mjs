@@ -686,7 +686,9 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
   const record = state.issues[issue.id] ?? { status: 'READY', attempt: 0 };
   if (record.status === 'MR_READY') return { paused: false };
   const firstAttempt = record.status === 'REWORK_REQUIRED' ? record.attempt + 1 : Math.max(record.attempt || 1, 1);
-  if (firstAttempt > MAX_REVIEW_ITERATIONS) return pause(runDir, state, 'REVIEW_LIMIT', { issue: issue.id, attempts: record.attempt, message: 'The issue already used all allowed implementation/review iterations.' });
+  // A person can grant another round of iterations from the dashboard (retry-issue) after REVIEW_LIMIT.
+  const maxAttempts = record.max_attempts ?? MAX_REVIEW_ITERATIONS;
+  if (firstAttempt > maxAttempts) return pause(runDir, state, 'REVIEW_LIMIT', { issue: issue.id, attempts: record.attempt, message: 'The issue already used all allowed implementation/review iterations.' });
   const dependencyBase = await buildDependencyBase(runDir, state, issue);
   if (dependencyBase.paused) return dependencyBase;
   const work = await ensureWorktree(state, issue, dependencyBase.baseSha);
@@ -759,7 +761,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
   const slices = plan.slices?.length ? plan.slices : [{ id: 'primary', goal: issue.title, paths: allowedPaths }];
   const tests = workerTestIds(issue.primary_repository);
 
-  for (let attempt = firstAttempt; attempt <= MAX_REVIEW_ITERATIONS; attempt += 1) {
+  for (let attempt = firstAttempt; attempt <= maxAttempts; attempt += 1) {
     record.attempt = attempt;
     record.status = 'IMPLEMENTING';
     state.issues[issue.id] = record;
@@ -839,7 +841,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
     if (!testsPassed || !reviewApproved) {
       record.feedback = JSON.stringify({ testsPassed, findings: review.data.findings ?? [] }, null, 2);
       record.status = 'REWORK_REQUIRED';
-      if (attempt === MAX_REVIEW_ITERATIONS) {
+      if (attempt === maxAttempts) {
         return pause(runDir, state, 'REVIEW_LIMIT', { issue: issue.id, review: review.data, verification });
       }
       continue;

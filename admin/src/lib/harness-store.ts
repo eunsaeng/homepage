@@ -453,9 +453,10 @@ export async function enqueueCommand(command: DashboardCommand) {
   const state = await readJson<HarnessState>(paths.state);
   if (!state) throw new Error("No harness run exists yet.");
   const payload: Record_ = { type: command.type, created_at: new Date().toISOString(), source: "dashboard" };
-  if (command.type === "pin-issue") {
+  if (command.type === "pin-issue" || command.type === "retry-issue") {
     if (!state.issues?.[command.issueId]) throw new Error("Unknown issue.");
-    Object.assign(payload, { issue_id: command.issueId, pinned: command.pinned });
+    payload.issue_id = command.issueId;
+    if (command.type === "pin-issue") payload.pinned = command.pinned;
   } else {
     if (!state.backlog?.[command.backlogId]) throw new Error("Unknown requirement.");
     payload.backlog_id = command.backlogId;

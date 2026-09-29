@@ -18,6 +18,9 @@ function parseCommand(body: unknown): DashboardCommand {
     case "pin-issue":
       if (typeof input.issueId !== "string" || !issueId.test(input.issueId) || typeof input.pinned !== "boolean") throw new Error("Invalid pin command.");
       return { type: "pin-issue", issueId: input.issueId, pinned: input.pinned };
+    case "retry-issue":
+      if (typeof input.issueId !== "string" || !issueId.test(input.issueId)) throw new Error("Invalid retry command.");
+      return { type: "retry-issue", issueId: input.issueId };
     case "resolve-question":
       if (typeof input.backlogId !== "string" || !requirementId.test(input.backlogId) || typeof input.questionId !== "string" || !/^[0-9a-f]{16}$/.test(input.questionId)) throw new Error("Invalid answer command.");
       return { type: "resolve-question", backlogId: input.backlogId, questionId: input.questionId, answer: text(input.answer, 10_000) };

@@ -4,7 +4,7 @@ export type Question = { id: string; text: string; options: string[]; source?: s
 
 export type PendingCommand = {
   file: string;
-  type: "pin-issue" | "resolve-question" | "edit-spec" | "approve-spec";
+  type: "pin-issue" | "retry-issue" | "resolve-question" | "edit-spec" | "approve-spec";
   createdAt: string;
   issueId?: string;
   backlogId?: string;
@@ -105,6 +105,7 @@ export type IssueDetail = { issue: Issue; steps: Step[]; stages: StageLog[] };
 
 export type DashboardCommand =
   | { type: "pin-issue"; issueId: string; pinned: boolean }
+  | { type: "retry-issue"; issueId: string }
   | { type: "resolve-question"; backlogId: string; questionId: string; answer: string }
   | { type: "edit-spec"; backlogId: string; markdown: string }
   | { type: "approve-spec"; backlogId: string };
