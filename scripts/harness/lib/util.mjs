@@ -28,13 +28,29 @@ export async function writeStageMarkdown(stageDir, input, output) {
   await atomicWrite(path.join(stageDir, 'output.md'), `${output.trim()}\n`);
 }
 
+// Stage outputs often carry Markdown with other code blocks (for example ```kotlin) before the JSON reply,
+// so every fenced block is tried, json-tagged ones first and later ones before earlier ones.
 export function parseJsonPayload(markdown) {
-  const fence = markdown.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fence ? fence[1] : markdown;
-  const first = candidate.indexOf('{');
-  const last = candidate.lastIndexOf('}');
-  if (first < 0 || last < first) throw new Error('Model output did not contain a JSON object.');
-  return JSON.parse(candidate.slice(first, last + 1));
+  const blocks = [...markdown.matchAll(/```([\w-]*)[^\n]*\n([\s\S]*?)\n?```/g)].map((match) => ({ tag: match[1].toLowerCase(), body: match[2] }));
+  const ordered = [...blocks.filter((block) => block.tag === 'json').reverse(), ...blocks.filter((block) => block.tag !== 'json').reverse()];
+  const asObject = (text) => {
+    const first = text.indexOf('{');
+    const last = text.lastIndexOf('}');
+    if (first < 0 || last < first) return null;
+    try {
+      const value = JSON.parse(text.slice(first, last + 1));
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : null;
+    } catch {
+      return null;
+    }
+  };
+  for (const block of ordered) {
+    const value = asObject(block.body);
+    if (value) return value;
+  }
+  const whole = asObject(markdown);
+  if (whole) return whole;
+  throw new Error('Model output did not contain a JSON object.');
 }
 
 // Node refuses to spawn Windows batch files (pnpm.cmd) without a shell, so they run through cmd.exe with
