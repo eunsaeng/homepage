@@ -113,6 +113,8 @@ Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리�
 ## 6. 구현·검증·독립 Review 반복 규칙
 
 - 한 iteration은 `Implement → 실제 Test/Verify → 독립 Review`다. Plan 생성 및 plan review는 iteration count에 포함하지 않는다.
+- 리뷰의 차단 기준은 severity로 정한다. 계획 리뷰는 P0/P1(완료 조건 누락, repository 경계 위반, slice 겹침·과대, 잘못된 테스트 명령)만 계획을 되돌리고, P2/P3는 구현 worker에 참고로 전달한다. 코드 리뷰는 P0~P2만 iteration을 되돌리고 P3는 MR 설명에 남긴다. 계획 리뷰와 코드 리뷰는 issue worktree를 읽기 전용으로 볼 수 있다(`wiki/` 제외).
+- 리뷰의 `UNRESOLVED`는 구현 루프 안에서 누구도 정할 수 없는 제품·보안·소유권 결정에만 쓴다. 문서 표현이나 검증하지 못한 사항은 finding으로 돌려보낸다.
 - 독립 Review는 Implement와 별도 `claude -p` 프로세스/세션에서 수행한다. Implement 세션 transcript나 미제출 메모는 전달하지 않는다.
 - Review 입력은 승인 Spec/Issue/plan, 실제 diff, 실제 test logs, 필요한 wiki 발췌뿐이다. Reviewer는 같은 worktree에 파일을 수정하지 않는다.
 - Test 실패 또는 Review의 `REQUEST_CHANGES`는 다음 iteration의 Implement 입력이 된다. 시도 수는 issue 단위로 1, 2, 3까지 기록한다.

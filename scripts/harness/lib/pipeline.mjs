@@ -18,6 +18,8 @@ const commitIdentity = ['-c', 'user.name=Homepage Harness', '-c', 'user.email=ha
 let activeState = null;
 
 const MAX_SCHEMA_FAILURES = 3;
+const BLOCKING_PLAN_SEVERITIES = new Set(['P0', 'P1']);
+const BLOCKING_CODE_SEVERITIES = new Set(['P0', 'P1', 'P2']);
 const SPEC_FIELDS = ['spec_markdown', 'spec_status', 'spec_path', 'unresolved_questions', 'unresolved_resolutions', 'appended_resolution_ids', 'human_approval', 'review_findings', 'approval'];
 
 // The model answered but not in the requested JSON shape; retried a few times, then treated as a human decision.
@@ -671,6 +673,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
   const planPrompt = `${PROMPTS.implementationPlan(issue, specMarkdown, wikiExcerpts, inventory.stdout)}\n\nReturn JSON: {"markdown":"# Implementation plan ...","slices":[{"id":"...","kind":"code|wiki","goal":"...","paths":["..."]}],"allowed_paths":["..."] ,"test_ids":["..."],"unresolved":[]}.`;
   let plan;
   let planFeedback = '';
+  let planNotes = '';
   for (let planAttempt = 1; planAttempt <= 3; planAttempt += 1) {
     const response = await modelStage({ runDir, stage: `issues/${issue.id}/plans/attempt-${planAttempt}`, model: MODELS.implementationPlan, cwd: work.worktree, readOnly: true, disallowedTools: ['Read(wiki/**)', 'Grep(wiki/**)', 'Glob(wiki/**)'], prompt: `${planPrompt}\n\nPlan revision feedback:\n${planFeedback || '(none)'}` });
     if (response.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', response.data.unresolved);
@@ -702,10 +705,15 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
       if (planAttempt === 3) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, planErrors: sliceErrors });
       continue;
     }
-    const review = await modelStage({ runDir, stage: `issues/${issue.id}/plans/review-${planAttempt}`, model: MODELS.planReview, prompt: `${PROMPTS.planReview(issue, specMarkdown, plan.markdown ?? response.output, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
+    const review = await modelStage({ runDir, stage: `issues/${issue.id}/plans/review-${planAttempt}`, model: MODELS.planReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.planReview(issue, specMarkdown, plan.markdown ?? response.output, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `issues/${issue.id}/plans/plan-review-${planAttempt}.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
-    if (review.data.decision === 'APPROVE') break;
+    // Only P0/P1 findings block a plan; lower-severity notes go to the implementation workers.
+    const planBlocking = (review.data.findings ?? []).filter((finding) => BLOCKING_PLAN_SEVERITIES.has(finding.severity));
+    if (review.data.decision === 'APPROVE' || ((review.data.findings ?? []).length && !planBlocking.length)) {
+      planNotes = (review.data.findings ?? []).map((finding) => `- [${finding.severity ?? '?'}] ${finding.text ?? JSON.stringify(finding)}`).join('\n');
+      break;
+    }
     if (planAttempt === 3) return pause(runDir, state, 'UNRESOLVED', `Implementation plan for ${issue.id} remains unapproved after three revisions.`);
     planFeedback = JSON.stringify(review.data.findings ?? []);
   }
@@ -741,7 +749,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
           cwd: repoCwd,
           edits: true,
           disallowedTools: ['Read(wiki/**)', 'Grep(wiki/**)', 'Glob(wiki/**)', 'Edit(wiki/**)', 'Write(wiki/**)'],
-          prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"unresolved":[]}.`,
+          prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}${planNotes ? `\n\nPlan review notes (non-blocking):\n${planNotes}` : ''}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"unresolved":[]}.`,
         });
         await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/implementation/${safeId(slice.id)}/implementation.md`, implementation.output);
       }
@@ -793,7 +801,10 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
     const review = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/review`, model: MODELS.codeReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.codeReview(issue, specMarkdown, plan.markdown ?? '', diff, verification, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/review/code-review.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
-    if (!testsPassed || review.data.decision !== 'APPROVE') {
+    // P3 findings do not use up an iteration; they stay in the review artifact and the MR description.
+    const reviewFindings = review.data.findings ?? [];
+    const reviewApproved = review.data.decision === 'APPROVE' || (reviewFindings.length > 0 && !reviewFindings.some((finding) => BLOCKING_CODE_SEVERITIES.has(finding.severity)));
+    if (!testsPassed || !reviewApproved) {
       record.feedback = JSON.stringify({ testsPassed, findings: review.data.findings ?? [] }, null, 2);
       record.status = 'REWORK_REQUIRED';
       if (attempt === MAX_REVIEW_ITERATIONS) {
