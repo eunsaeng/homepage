@@ -326,7 +326,7 @@ stub 계정으로 로그인하고 세션 쿠키를 발급한다. 계정은 동�
 현재 세션을 폐기하고 쿠키를 만료시킨다. 세션이 없거나 만료되었거나 이미 폐기되었어도(로그아웃, 역할 전부 회수, 계정 비활성화) 같은 응답을 돌려주어, admin이 로그아웃 중 오류를 처리하지 않아도 되게 한다.
 
 - 권한: 없음 (세션 검사 순서를 적용하지 않음)
-- 성공: 항상 `204 NO CONTENT`, `Set-Cookie: local_session=; Max-Age=0; Path=/`
+- 성공: 항상 `204 NO CONTENT`, `Set-Cookie: local_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax` (로그인 쿠키와 같은 속성으로 만료)
 - 부수 효과: 유효한 세션이면 `revoke_reason='LOGOUT'`으로 폐기한다. 이미 폐기된 세션의 사유는 바꾸지 않는다.
 
 요청:
