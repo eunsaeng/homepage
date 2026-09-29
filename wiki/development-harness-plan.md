@@ -129,6 +129,8 @@ Model alias는 설정에서 명시적으로 `opus`, `sonnet`, `haiku`로 관리�
 - Review 승인 후 controller가 allowlist 경로만 stage하고 issue 단위 commit을 생성한다. commit message에는 backlog ID와 issue ID를 넣는다.
 - Local MR은 `.harness/runs/<run-id>/merge-requests/<issue-id>.md` 및 로컬 source branch로 표현한다. remote push, GitHub/GitLab API 호출은 하지 않는다.
 - DAG dependency는 upstream의 `MR_READY`와 해당 source branch를 기록한다. downstream worktree base는 필요한 predecessor branch를 통합한 local integration SHA다.
+- backlog item이 완료되면 그 issue commit을 run 누적 integration branch(`harness/integration/<backlog-id>--accumulated-*`)로 통합하고 run base를 그 tip으로 옮긴다. 다음 backlog item의 issue는 앞선 backlog의 코드 위에서 시작한다. run base는 run 시작 시 정하고 `resume` 때 다시 정하지 않는다.
+- 새 `run`은 이전 run에서 완료된 backlog item과 그 issue를 이어받아 다시 처리하지 않는다. 이어받은 issue commit이 현재 branch에 병합되어 있지 않으면 병합할 branch 목록과 함께 멈춘다. `main` 병합은 사람이 한다.
 - `main`에 commit이 있으면 bootstrap은 현재 `HEAD`를 base로 사용한다(현재 저장소는 초기 commit `chore: bootstrap homepage CMS workspace`가 있다). commit이 없는 저장소에서는 최초 run의 bootstrap stage가 workspace inventory로 명시적 baseline path manifest를 만들고, manifest에 든 경로만 controller가 stage해 초기 commit을 자동 생성한다. `git add .`는 금지한다. manifest로 목적을 판별할 수 없는 untracked 파일이 있으면 이를 `UNRESOLVED`로 저장하고 멈춘다. baseline commit 완료 후에만 issue worktree를 만든다.
 - remote MR 게시가 필요한 경우 별도의 adapter와 credential 설계를 추가하고, 이 계획의 local MR 기능과 분리한다.
 

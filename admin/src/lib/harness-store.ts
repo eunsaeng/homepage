@@ -316,7 +316,7 @@ function stageLabel(stageId: string): string {
   return stageId;
 }
 
-async function readStages(state: HarnessState, dirs: StageDir[]): Promise<StageLog[]> {
+async function readStages(state: HarnessState, runId: string, dirs: StageDir[]): Promise<StageLog[]> {
   const stages = await Promise.all(dirs.map(async ({ id, directory }) => {
     const session = await readJson<Record_>(path.join(directory, "session.json"));
     const sessionId: string | null = session?.session_id ?? null;
@@ -326,6 +326,7 @@ async function readStages(state: HarnessState, dirs: StageDir[]): Promise<StageL
       sortKey: session?.started_at ?? inputStat?.mtime.toISOString() ?? "",
       stage: {
         id,
+        runId,
         label: stageLabel(id),
         model: session?.model ?? activeStage?.model ?? null,
         sessionId,
@@ -400,19 +401,20 @@ function issueSteps(issue: Issue, stageIds: string[], state: HarnessState): Step
   return steps;
 }
 
-async function stagesFor(state: HarnessState | null, harnessDir: string, id: string, includeIssues: boolean) {
+// Work carried over from an earlier run keeps its logs in that run's directory.
+async function stagesFor(state: HarnessState | null, harnessDir: string, id: string, includeIssues: boolean, carriedFromRun?: string) {
   if (!state?.run_id) return { stageIds: [] as string[], stages: [] as StageLog[] };
-  const runDirectory = path.join(harnessDir, "runs", state.run_id);
+  const runDirectory = path.join(harnessDir, "runs", carriedFromRun ?? state.run_id);
   const dirs = (await listStageDirectories(runDirectory, runDirectory)).filter((dir) => belongsTo(dir.id, id, includeIssues));
-  return { stageIds: dirs.map((dir) => dir.id), stages: await readStages(state, dirs) };
+  return { stageIds: dirs.map((dir) => dir.id), stages: await readStages(state, carriedFromRun ?? state.run_id, dirs) };
 }
 
 // Input, output and logs of one stage, loaded only when its accordion item is opened.
-export async function getStageContent(stageId: string): Promise<StageContent | null> {
+export async function getStageContent(stageId: string, runId?: string): Promise<StageContent | null> {
   const paths = await getHarnessPaths();
   const state = await readJson<HarnessState>(paths.state);
   if (!state?.run_id) return null;
-  const runDirectory = path.join(paths.harness, "runs", state.run_id);
+  const runDirectory = path.join(paths.harness, "runs", runId ?? state.run_id);
   const directory = path.resolve(runDirectory, ...stageId.split("/"));
   const relative = path.relative(runDirectory, directory);
   if (!relative || relative.startsWith("..") || path.isAbsolute(relative) || relative.split(path.sep)[0] === "logs") return null;
@@ -431,7 +433,7 @@ export async function getRequirementDetail(id: string): Promise<RequirementDetai
   const requirement = requirements.find((item) => item.id === id);
   if (!requirement) return null;
   const relatedIssues = issues.filter((issue) => issue.backlogId === id).sort(byPriority);
-  const { stageIds, stages } = await stagesFor(state, paths.harness, id, true);
+  const { stageIds, stages } = await stagesFor(state, paths.harness, id, true, state?.backlog?.[id]?.carried_from_run);
   const steps = state ? requirementSteps(requirement, relatedIssues, stageIds, state) : [];
   return { requirement, issues: relatedIssues, steps, stages };
 }
@@ -440,7 +442,7 @@ export async function getIssueDetail(id: string): Promise<IssueDetail | null> {
   const { paths, state, issues } = await loadModel();
   const issue = issues.find((item) => item.id === id);
   if (!issue) return null;
-  const { stageIds, stages } = await stagesFor(state, paths.harness, id, false);
+  const { stageIds, stages } = await stagesFor(state, paths.harness, id, false, state?.issues?.[id]?.carried_from_run);
   return { issue, steps: state ? issueSteps(issue, stageIds, state) : [], stages };
 }
 

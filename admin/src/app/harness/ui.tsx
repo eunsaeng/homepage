@@ -172,7 +172,7 @@ const StageOutput = memo(function StageOutput({ source }: { source: string }) {
 
 function StageBody({ stage }: { stage: StageLog }) {
   // Running stages refresh; finished ones load once (the version key changes when a stage completes).
-  const url = `/api/harness/stage?id=${encodeURIComponent(stage.id)}&v=${encodeURIComponent(stage.completedAt ?? "")}`;
+  const url = `/api/harness/stage?id=${encodeURIComponent(stage.id)}&run=${encodeURIComponent(stage.runId)}&v=${encodeURIComponent(stage.completedAt ?? "")}`;
   const { data, error } = usePolling<StageContent>(url, stage.running ? 4000 : 0);
   const [tab, setTab] = useState<"output" | "input" | "logs">("output");
   if (error && !data) return <p className="px-4 py-3 text-sm text-red-600">{error}</p>;

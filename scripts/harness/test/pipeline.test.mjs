@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runProcess } from '../lib/util.mjs';
-import { modelStage, StagePauseError } from '../lib/pipeline.mjs';
+import { carryOverCompleted, modelStage, StagePauseError } from '../lib/pipeline.mjs';
 
 // A stand-in for `claude -p --output-format json`: replies from a script of responses, one per call.
 async function fakeClaude(dir, replies) {
@@ -75,3 +75,18 @@ test('a stage recovers when a retry returns valid JSON', { timeout: 60_000 }, ()
     assert.deepEqual(response.data, { ok: true });
     assert.equal(await calls(), 2);
   }));
+
+test('a new run carries over completed backlog items and their issues only', () => {
+  const previous = {
+    run_id: 'run-a',
+    backlog: { 'BL-done': { status: 'COMPLETED', issue_ids: ['BL-done--x'] }, 'BL-open': { status: 'WAITING_FOR_HUMAN', issue_ids: [] } },
+    issues: { 'BL-done--x': { status: 'MR_READY', commit_sha: 'abc' }, 'BL-open--y': { status: 'READY' } },
+  };
+  const next = carryOverCompleted(previous, { run_id: 'run-b', backlog: {}, issues: {} });
+  assert.deepEqual(Object.keys(next.backlog), ['BL-done']);
+  assert.deepEqual(Object.keys(next.issues), ['BL-done--x']);
+  assert.equal(next.backlog['BL-done'].carried_from_run, 'run-a');
+  assert.equal(next.issues['BL-done--x'].carried_from_run, 'run-a');
+  // Carried records keep pointing at the run that produced them.
+  assert.equal(carryOverCompleted(next, { run_id: 'run-c', backlog: {}, issues: {} }).backlog['BL-done'].carried_from_run, 'run-a');
+});

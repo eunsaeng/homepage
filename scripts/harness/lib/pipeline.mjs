@@ -93,6 +93,28 @@ export async function modelStage({ runDir, stage, model, prompt, cwd = runDir, e
   }
 }
 
+// A new run keeps what earlier runs finished: completed backlog items and their merged issues.
+export function carryOverCompleted(previous, next) {
+  for (const [backlogId, record] of Object.entries(previous.backlog ?? {})) {
+    if (record.status !== 'COMPLETED') continue;
+    next.backlog[backlogId] = { ...record, carried_from_run: record.carried_from_run ?? previous.run_id };
+    for (const issueId of record.issue_ids ?? []) {
+      if (previous.issues?.[issueId]) next.issues[issueId] = { ...previous.issues[issueId], carried_from_run: previous.issues[issueId].carried_from_run ?? previous.run_id };
+    }
+  }
+  return next;
+}
+
+async function unmergedCarriedIssues(state, headSha) {
+  const unmerged = [];
+  for (const [issueId, record] of Object.entries(state.issues)) {
+    if (!record.carried_from_run || !record.commit_sha) continue;
+    const merged = await git(ROOT, ['merge-base', '--is-ancestor', record.commit_sha, headSha], { allowFailure: true });
+    if (merged.code !== 0) unmerged.push({ issue: issueId, branch: record.branch, commit: record.commit_sha });
+  }
+  return unmerged;
+}
+
 // Applies dashboard commands (pins, answers, Spec edits and approvals) to the in-memory state.
 async function applyCommandsAtCheckpoint(state) {
   const results = await applyDashboardCommands(state);
@@ -196,6 +218,7 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
   const knownIds = new Set(items.map((item) => item.backlogId));
   for (const item of items) {
     const saved = state.backlog[item.backlogId];
+    if (saved?.status === 'COMPLETED') continue;
     const excerpts = await buildWikiExcerpts(item, wikiIndex);
     const excerptHash = sha256(excerpts.map((excerpt) => `${excerpt.path}:${excerpt.sha256}`).join('\n'));
     if (saved?.source_hash === item.contentHash && saved?.excerpt_hash === excerptHash && saved?.priority && saved?.triage_status === 'READY') continue;
@@ -896,6 +919,11 @@ async function createSpecIssuesAndRun(runDir, state, item, wikiIndex, allItems) 
     state.active_issue_ids = [];
     await saveState(state);
   }
+  // Later backlog items build on this one's code: merge its issue commits and move the run base forward.
+  const accumulated = await buildDependencyBase(runDir, state, { id: `${item.backlogId}--accumulated`, dependencies: issueResult.issues.map((issue) => issue.id) });
+  if (accumulated.paused) return accumulated;
+  state.base_sha = accumulated.baseSha;
+  state.backlog[item.backlogId].accumulated_sha = accumulated.baseSha;
   state.backlog[item.backlogId].status = 'COMPLETED';
   state.backlog[item.backlogId].completed_at = new Date().toISOString();
   state.backlog_cursor += 1;
@@ -912,9 +940,11 @@ export async function runHarness({ resume = false, only = [] } = {}) {
       throw new Error('An active or paused run exists. Use `pnpm harness resume` or inspect it with `pnpm harness status`.');
     }
     if (!resume || state.phase === 'QUEUE_DRAINED') {
+      const previous = state;
       state = createInitialState();
       // `run --only` limits a trial run to named backlog items; resume keeps the same scope.
       state.only_backlog_ids = only;
+      if (previous) carryOverCompleted(previous, state);
     }
     activeState = state;
     await applyCommandsAtCheckpoint(state);
@@ -923,10 +953,17 @@ export async function runHarness({ resume = false, only = [] } = {}) {
     const runDir = path.join(RUNS_DIR, state.run_id);
     await ensureDir(runDir);
     try {
-    const baseSha = await bootstrapRepository(runDir, state);
-    if (typeof baseSha !== 'string') return baseSha;
-    state.base_sha = baseSha;
-    await saveState(state);
+    const headSha = await bootstrapRepository(runDir, state);
+    if (typeof headSha !== 'string') return headSha;
+    // The base is fixed when the run starts and then advances as backlog items complete; resume keeps it.
+    if (!state.base_sha) {
+      const unmerged = await unmergedCarriedIssues(state, headSha);
+      if (unmerged.length) {
+        return pause(runDir, state, 'UNRESOLVED', { message: 'Completed work carried over from the previous run is not merged into the current branch. Merge these branches, then run `pnpm harness resume`.', branches: unmerged });
+      }
+      state.base_sha = headSha;
+      await saveState(state);
+    }
 
     const allItems = await loadBacklog(REQUIREMENTS_DIR);
     const scope = state.only_backlog_ids ?? [];

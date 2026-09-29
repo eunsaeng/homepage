@@ -88,6 +88,7 @@ export type Step = { key: string; label: string; state: StepState; detail?: stri
 
 export type StageLog = {
   id: string;
+  runId: string;
   label: string;
   model: string | null;
   sessionId: string | null;
