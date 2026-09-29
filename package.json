@@ -1,0 +1,14 @@
+{
+  "name": "homepage-workspace",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.7.0",
+  "scripts": {
+    "dev:web": "pnpm --filter web dev",
+    "dev:admin": "pnpm --filter admin dev",
+    "test:e2e": "pnpm --filter e2e test",
+    "test:e2e:ui": "pnpm --filter e2e test:ui",
+    "harness": "node scripts/harness/cli.mjs",
+    "test:harness": "node --test scripts/harness/test/*.test.mjs"
+  }
+}

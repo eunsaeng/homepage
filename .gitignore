@@ -1,0 +1,17 @@
+node_modules
+.next/
+out/
+build/
+target/
+.gradle/
+coverage/
+playwright-report/
+test-results/
+.harness/
+.worktrees/
+.env*
+!.env.example
+*.tsbuildinfo
+.kotlin/
+# personal editor settings
+.vscode/
