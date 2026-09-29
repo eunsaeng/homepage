@@ -626,6 +626,15 @@ async function getDiff(worktree, baseSha) {
   return `${tracked.stdout}\n${working.stdout}\n${additions.join('\n')}`.slice(0, 250_000);
 }
 
+// Installs workspace dependencies. The frozen offline install is fast and reproducible; when an issue added
+// a dependency (or the offline cache lacks metadata) it falls back to a normal install that updates the lockfile.
+async function installWorkspace(worktree) {
+  const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const frozen = await runProcess(pnpm, ['install', '--offline', '--frozen-lockfile'], { cwd: worktree, timeoutMs: 30 * 60 * 1000 });
+  if (frozen.code === 0) return frozen;
+  return runProcess(pnpm, ['install', '--prefer-offline', '--no-frozen-lockfile'], { cwd: worktree, timeoutMs: 30 * 60 * 1000 });
+}
+
 async function ensureWorktree(state, issue, baseSha) {
   const record = state.issues[issue.id] ?? {};
   const worktree = record.worktree ?? path.join(WORKTREES_DIR, issue.id);
@@ -643,7 +652,7 @@ async function ensureWorktree(state, issue, baseSha) {
   record.status = 'WORKTREE_READY';
   state.issues[issue.id] = record;
   await saveState(state);
-  const install = await runProcess(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['install', '--offline', '--frozen-lockfile'], { cwd: worktree, timeoutMs: 30 * 60 * 1000 });
+  const install = await installWorkspace(worktree);
   if (install.code !== 0) throw new Error(`Workspace install failed in ${issue.id}: ${install.stderr.slice(-2000)}`);
   return record;
 }
@@ -859,8 +868,18 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
         record.extra_test_paths = [...new Set([...(record.extra_test_paths ?? []), ...testUpdates])];
         await appendJsonLine(path.join(runDir, 'logs', 'controller.jsonl'), { stage: sliceStage, issue_id: issue.id, event: 'test-paths-outside-allowlist', files: testUpdates });
       }
-      const violations = outsideAllowlist.filter((file) => !testUpdates.includes(file));
+      // A dependency change in an allowed package.json legitimately updates the workspace lockfile.
+      const lockfileUpdate = changed.some((file) => file.endsWith('package.json') && !outsideAllowlist.includes(file)) ? ['pnpm-lock.yaml'] : [];
+      const violations = outsideAllowlist.filter((file) => !testUpdates.includes(file) && !lockfileUpdate.includes(file));
       if (violations.length) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, message: 'Worker edited paths outside the approved allowlist.', files: violations });
+    }
+
+    // New dependencies must be installed before verification; this may update pnpm-lock.yaml.
+    if ((await changedPaths(work.worktree)).some((file) => file.endsWith('package.json'))) {
+      const install = await installWorkspace(work.worktree);
+      if (install.code !== 0) {
+        record.feedback = JSON.stringify({ testsPassed: false, findings: [{ severity: 'P1', text: `pnpm install failed after the package.json change: ${install.stderr.slice(-1500)}` }] }, null, 2);
+      }
     }
 
     // Diff against this issue's own base so predecessor commits merged into it are not reviewed again.
