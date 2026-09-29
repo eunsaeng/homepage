@@ -17,6 +17,7 @@ const commitIdentity = ['-c', 'user.name=Homepage Harness', '-c', 'user.email=ha
 let activeState = null;
 
 const MAX_SCHEMA_FAILURES = 3;
+const SPEC_FIELDS = ['spec_markdown', 'spec_status', 'spec_path', 'unresolved_questions', 'unresolved_resolutions', 'resolutions_appended', 'approval'];
 
 // The model answered but not in the requested JSON shape; retried a few times, then treated as a human decision.
 class StageSchemaError extends Error {}
@@ -182,8 +183,14 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
   const knownIds = new Set(items.map((item) => item.backlogId));
   for (const item of items) {
     const saved = state.backlog[item.backlogId];
-    if (saved?.source_hash === item.contentHash && saved?.priority && saved?.triage_status === 'READY') continue;
     const excerpts = await buildWikiExcerpts(item, wikiIndex);
+    const excerptHash = sha256(excerpts.map((excerpt) => `${excerpt.path}:${excerpt.sha256}`).join('\n'));
+    if (saved?.source_hash === item.contentHash && saved?.excerpt_hash === excerptHash && saved?.priority && saved?.triage_status === 'READY') continue;
+    // The request or its wiki evidence changed (for example after a human answered an UNRESOLVED question in
+    // the wiki). A Spec that has not been split into issues yet is regenerated from the new evidence.
+    if (saved && saved.status !== 'COMPLETED' && !saved.issue_ids?.length && (saved.source_hash !== item.contentHash || saved.excerpt_hash !== excerptHash)) {
+      for (const field of SPEC_FIELDS) delete saved[field];
+    }
     const excerptMarkdown = excerptsToMarkdown(excerpts);
     const input = stageInput('Backlog triage', [
       ['Backlog ID', item.backlogId],
@@ -208,6 +215,7 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
       ...(state.backlog[item.backlogId] ?? {}),
       file_name: item.fileName,
       source_hash: item.contentHash,
+      excerpt_hash: excerptHash,
       priority: assignedPriority,
       priority_rationale: stage.data.rationale ?? '',
       dependencies,
