@@ -78,3 +78,12 @@ test('command files are applied in order and archived with their result', async 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('answers can target an issue-level question', () => {
+  const current = state();
+  const issueQuestion = normalizeQuestion('Which stub fixture wins?', 'code-review');
+  current.issues['BL-done--x'].unresolved_questions = [issueQuestion];
+  assert.equal(applyCommand(current, { type: 'resolve-question', issue_id: 'BL-done--x', question_id: issueQuestion.id, answer: 'Keep the existing stub' }).status, 'applied');
+  assert.equal(current.issues['BL-done--x'].unresolved_resolutions[issueQuestion.id], 'Keep the existing stub');
+  assert.deepEqual(pendingQuestions(current.issues['BL-done--x']), []);
+});

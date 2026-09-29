@@ -4,6 +4,17 @@ import { useState } from "react";
 import type { PendingCommand, Question, RequirementDetail } from "@/lib/harness-types";
 import { MarkdownView, PriorityBadge, Section, StageAccordion, StatusBadge, Stepper, sendCommand } from "./ui";
 
+const sourceLabel: Record<string, string> = {
+  approval: "승인 검토",
+  backlog: "요청 문서",
+  spec: "Spec",
+  plan: "구현 계획",
+  "plan-review": "계획 리뷰",
+  "code-review": "코드 리뷰",
+  "wiki-slice": "wiki 변경",
+  "merge-request": "MR",
+};
+
 type Props = {
   detail: RequirementDetail;
   pending: PendingCommand[];
@@ -13,7 +24,7 @@ type Props = {
   onSelectIssue: (id: string) => void;
 };
 
-function QuestionCard({ backlogId, question, answer, pendingAnswer, onChanged }: { backlogId: string; question: Question; answer?: string; pendingAnswer?: string; onChanged: () => void }) {
+export function QuestionCard({ target, question, answer, pendingAnswer, onChanged }: { target: { backlogId: string } | { issueId: string }; question: Question; answer?: string; pendingAnswer?: string; onChanged: () => void }) {
   const [choice, setChoice] = useState<string>("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -24,7 +35,7 @@ function QuestionCard({ backlogId, question, answer, pendingAnswer, onChanged }:
     setBusy(true);
     setError(null);
     try {
-      await sendCommand({ type: "resolve-question", backlogId, questionId: question.id, answer: composed });
+      await sendCommand({ type: "resolve-question", ...target, questionId: question.id, answer: composed });
       onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -36,7 +47,7 @@ function QuestionCard({ backlogId, question, answer, pendingAnswer, onChanged }:
   return (
     <div className="rounded-lg border border-amber-200 bg-white p-4">
       <div className="flex items-start gap-2">
-        <span className="mt-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">{question.source === "approval" ? "승인 검토" : question.source === "backlog" ? "요청 문서" : "Spec"}</span>
+        <span className="mt-0.5 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">{sourceLabel[question.source ?? ""] ?? question.source ?? "Spec"}</span>
         <p className="flex-1 text-sm whitespace-pre-wrap text-zinc-800">{question.text}</p>
       </div>
       {answer ? (
@@ -171,7 +182,7 @@ export function RequirementDetailView({ detail, pending, openStages, onToggleSta
             </div>
           )}
           {requirement.questions.map((question) => (
-            <QuestionCard key={question.id} backlogId={requirement.id} question={question} answer={requirement.answers[question.id]} pendingAnswer={pendingAnswers.get(question.id)} onChanged={onChanged} />
+            <QuestionCard key={question.id} target={{ backlogId: requirement.id }} question={question} answer={requirement.answers[question.id]} pendingAnswer={pendingAnswers.get(question.id)} onChanged={onChanged} />
           ))}
         </Section>
       )}

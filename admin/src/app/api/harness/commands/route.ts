@@ -21,9 +21,16 @@ function parseCommand(body: unknown): DashboardCommand {
     case "retry-issue":
       if (typeof input.issueId !== "string" || !issueId.test(input.issueId)) throw new Error("Invalid retry command.");
       return { type: "retry-issue", issueId: input.issueId };
-    case "resolve-question":
-      if (typeof input.backlogId !== "string" || !requirementId.test(input.backlogId) || typeof input.questionId !== "string" || !/^[0-9a-f]{16}$/.test(input.questionId)) throw new Error("Invalid answer command.");
-      return { type: "resolve-question", backlogId: input.backlogId, questionId: input.questionId, answer: text(input.answer, 10_000) };
+    case "resolve-question": {
+      // A question belongs to a requirement (Spec) or to an issue (plan, implementation, review).
+      const forIssue = typeof input.issueId === "string" && issueId.test(input.issueId);
+      const forRequirement = typeof input.backlogId === "string" && requirementId.test(input.backlogId);
+      if (forIssue === forRequirement || typeof input.questionId !== "string" || !/^[0-9a-f]{16}$/.test(input.questionId)) throw new Error("Invalid answer command.");
+      const answer = text(input.answer, 10_000);
+      return forIssue
+        ? { type: "resolve-question", issueId: input.issueId as string, questionId: input.questionId, answer }
+        : { type: "resolve-question", backlogId: input.backlogId as string, questionId: input.questionId, answer };
+    }
     case "edit-spec":
       if (typeof input.backlogId !== "string" || !requirementId.test(input.backlogId)) throw new Error("Invalid Spec edit command.");
       return { type: "edit-spec", backlogId: input.backlogId, markdown: text(input.markdown, 200_000) };

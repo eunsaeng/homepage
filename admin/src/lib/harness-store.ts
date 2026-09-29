@@ -167,6 +167,8 @@ function toIssue(id: string, record: Record_, state: HarnessState | null): Issue
     branch: record.branch ?? null,
     commitSha: record.commit_sha ?? null,
     mrPath: record.mr_path ?? null,
+    questions: (record.unresolved_questions ?? []).map((question: Question) => ({ ...question, options: question.options ?? [] })),
+    answers: record.unresolved_resolutions ?? {},
   };
 }
 
@@ -453,12 +455,15 @@ export async function enqueueCommand(command: DashboardCommand) {
   const state = await readJson<HarnessState>(paths.state);
   if (!state) throw new Error("No harness run exists yet.");
   const payload: Record_ = { type: command.type, created_at: new Date().toISOString(), source: "dashboard" };
-  if (command.type === "pin-issue" || command.type === "retry-issue") {
+  if (command.type === "resolve-question" && command.issueId) {
+    if (!state.issues?.[command.issueId]) throw new Error("Unknown issue.");
+    Object.assign(payload, { issue_id: command.issueId, question_id: command.questionId, answer: command.answer });
+  } else if (command.type === "pin-issue" || command.type === "retry-issue") {
     if (!state.issues?.[command.issueId]) throw new Error("Unknown issue.");
     payload.issue_id = command.issueId;
     if (command.type === "pin-issue") payload.pinned = command.pinned;
   } else {
-    if (!state.backlog?.[command.backlogId]) throw new Error("Unknown requirement.");
+    if (!command.backlogId || !state.backlog?.[command.backlogId]) throw new Error("Unknown requirement.");
     payload.backlog_id = command.backlogId;
     if (command.type === "resolve-question") Object.assign(payload, { question_id: command.questionId, answer: command.answer });
     if (command.type === "edit-spec") payload.markdown = command.markdown;

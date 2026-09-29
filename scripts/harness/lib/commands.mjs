@@ -44,10 +44,11 @@ export function applyCommand(state, command) {
       return { status: 'applied' };
     }
     case 'resolve-question': {
-      const record = state.backlog?.[command.backlog_id];
+      // Questions live on the backlog record (Spec) or on an issue record (plan, implementation, review).
+      const record = command.issue_id ? state.issues?.[command.issue_id] : state.backlog?.[command.backlog_id];
       const question = record?.unresolved_questions?.find((item) => item.id === command.question_id);
       const answer = String(command.answer ?? '').trim();
-      if (!question) return reject(`Unknown question ${command.question_id} for ${command.backlog_id}.`);
+      if (!question) return reject(`Unknown question ${command.question_id} for ${command.issue_id ?? command.backlog_id}.`);
       if (!answer) return reject('Answer is empty.');
       record.unresolved_resolutions = { ...(record.unresolved_resolutions ?? {}), [question.id]: answer };
       return { status: 'applied' };

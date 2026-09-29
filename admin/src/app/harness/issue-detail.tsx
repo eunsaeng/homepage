@@ -1,6 +1,7 @@
 "use client";
 
-import type { IssueDetail } from "@/lib/harness-types";
+import type { IssueDetail, PendingCommand } from "@/lib/harness-types";
+import { QuestionCard } from "./requirement-detail";
 import { MarkdownView, PriorityBadge, Section, StageAccordion, StatusBadge, Stepper } from "./ui";
 
 type Props = {
@@ -10,12 +11,14 @@ type Props = {
   onTogglePin: () => void;
   retryPending: boolean;
   onRetry: () => void;
+  pending: PendingCommand[];
+  onChanged: () => void;
   openStages: Set<string>;
   onToggleStage: (id: string) => void;
   onSelectRequirement: (id: string) => void;
 };
 
-export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retryPending, onRetry, openStages, onToggleStage, onSelectRequirement }: Props) {
+export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retryPending, onRetry, pending, onChanged, openStages, onToggleStage, onSelectRequirement }: Props) {
   const { issue, steps, stages } = detail;
   const done = issue.status === "MR_READY";
   return (
@@ -48,6 +51,16 @@ export function IssueDetailView({ detail, pinned, pinPending, onTogglePin, retry
             {retryPending ? "재시도 요청됨 · 하네스 재개 시 반영" : "3회 더 반복"}
           </button>
         </div>
+      )}
+
+      {issue.questions.length > 0 && (
+        <Section title="사람 결정">
+          {issue.questions.map((question) => (
+            <QuestionCard key={question.id} target={{ issueId: issue.id }} question={question} answer={issue.answers[question.id]}
+              pendingAnswer={pending.find((command) => command.type === "resolve-question" && command.issueId === issue.id && command.questionId === question.id)?.answer}
+              onChanged={onChanged} />
+          ))}
+        </Section>
       )}
 
       <Section title="단계 진행"><Stepper steps={steps} /></Section>
