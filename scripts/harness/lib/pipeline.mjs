@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import { access, mkdir, readFile } from 'node:fs/promises';
+import { access, mkdir, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { MAX_REVIEW_ITERATIONS, MODELS, REPOSITORIES, REQUIREMENTS_DIR, ROOT, RUNS_DIR, STATE_DIR, TEST_COMMANDS, WIKI_DIR, WORKTREES_DIR } from './config.mjs';
@@ -807,9 +807,14 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
           cwd: repoCwd,
           edits: true,
           disallowedTools: ['Read(wiki/**)', 'Grep(wiki/**)', 'Glob(wiki/**)', 'Edit(wiki/**)', 'Write(wiki/**)'],
-          prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}${ownerDecisionsNote(record)}${planNotes ? `\n\nPlan review notes (non-blocking):\n${planNotes}` : ''}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"unresolved":[]}.`,
+          prompt: `${PROMPTS.implement(issue, plan.markdown ?? '', record.feedback ?? '', record.last_verification ?? '')}${ownerDecisionsNote(record)}${planNotes ? `\n\nPlan review notes (non-blocking):\n${planNotes}` : ''}\n\nWorker slice ${slice.id}: ${slice.goal}\nAllowed paths: ${slicePaths.join(', ')}\nReturn JSON: {"summary":"...","changed_paths":["..."],"deleted_paths":["..."],"unresolved":[]}.`,
         });
         await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/implementation/${safeId(slice.id)}/implementation.md`, implementation.output);
+        // Workers have no delete tool; the controller removes the files they list, within the slice allowlist.
+        const deletions = (implementation.data.deleted_paths ?? []).map((file) => String(file).replaceAll('\\', '/').replace(/^\.\//, ''));
+        const outside = deletions.filter((file) => file.split('/').includes('..') || path.isAbsolute(file) || !pathAllowed(file, [...slicePaths, ...allowedPaths]));
+        if (outside.length) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, message: 'Worker asked to delete paths outside the approved allowlist.', files: outside });
+        for (const file of deletions) await rm(path.join(work.worktree, ...file.split('/')), { force: true });
       }
       const changed = await changedPaths(work.worktree);
       const violations = changed.filter((file) => !pathAllowed(file, [...slicePaths, ...allowedPaths]));
