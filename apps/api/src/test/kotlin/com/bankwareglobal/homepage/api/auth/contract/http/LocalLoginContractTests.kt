@@ -76,6 +76,31 @@ class LocalLoginContractTests {
 
     @Disabled("request-apps-local-account-auth.md에서 구현")
     @Test
+    fun `422 response carries fields with name accountId`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `login with an existing cookie issues a new session and does not revoke the old one`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `stored admin_session row has token hash, account, expiry and no revoke`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
     fun `decision order is 400 before 422 before 403`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `400, 403 and 404 responses use error envelope with code, message, empty fields and traceId`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `error messages are Korean`() {
     }
 }

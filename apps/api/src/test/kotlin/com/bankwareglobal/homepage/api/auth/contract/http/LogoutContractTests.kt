@@ -49,6 +49,16 @@ class LogoutContractTests {
 
     @Disabled("request-apps-local-account-auth.md에서 구현")
     @Test
+    fun `expired session returns 204 with logout Set-Cookie`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `logout revokes only sessions that are neither revoked nor expired`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
     fun `logout cookie attributes match the login cookie`() {
     }
 

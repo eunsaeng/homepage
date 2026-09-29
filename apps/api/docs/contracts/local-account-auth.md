@@ -19,6 +19,7 @@
 - 이름은 `local_session`이다. 값은 서버가 발급한 불투명 토큰이다.
 - 로그인 응답: `Set-Cookie: local_session=<token>; Max-Age=28800; Path=/; HttpOnly; SameSite=Lax`
 - 로그아웃 응답: `Set-Cookie: local_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax`
+- 쿠키 속성의 순서는 의미가 없다. 위 문자열은 api-spec 표기 순서를 그대로 옮긴 것이고, 검증은 속성 집합으로 한다.
 - 두 쿠키는 한 빌더(`LocalSessionCookie`)에서 만들어 Path, HttpOnly, SameSite가 항상 같다. 브라우저는 속성이 같은 쿠키만 지운다.
 
 ### 만료
@@ -90,6 +91,9 @@
 - 권한: 없음(로그인 전 화면에서 호출). `local` 프로필에서만 존재한다.
 - 요청: 없음
 - 응답 200: `{ "items": Account[] }`
+- 범위: 동기화된 계정 중 `identity_provider='STUB'`인 전체 계정이다. `DAOU_OFFICE` 등 STUB이 아닌 계정은 목록에 넣지 않는다. `accountId` 오름차순으로 정렬한다.
+- 비활성 계정과 역할이 없는 계정도 포함한다(`active: false`, `roles: []`).
+- `local_session` 쿠키가 있어도 보지 않는다.
 
 | HTTP | code | 조건 |
 |---|---|---|
@@ -110,6 +114,11 @@
 | 422 | `VALIDATION_FAILED` | `accountId`가 없거나 null이거나 1~120자를 벗어남 |
 | 403 | `LOGIN_DENIED` | 계정이 없거나, 비활성이거나, 역할이 없음 |
 
+- 422 응답의 `fields`는 `[{ "name": "accountId", "reason": "..." }]`이다.
+- 로그인 허용 조건: 동기화된 계정 중 `identity_provider='STUB'`인 계정이 있고, 활성이며, 역할이 하나 이상이다. 동기화된 계정이 STUB이 아니면(`DAOU_OFFICE` 등) 403 `LOGIN_DENIED`다. 따라서 200 응답의 계정은 항상 활성이고 `roles`가 비어 있지 않다.
+- 로그인은 항상 새 세션을 발급한다. 요청에 실린 기존 `local_session` 쿠키는 보지 않고 그 세션을 폐기하지도 않는다.
+- 저장되는 `admin_session` 행: 토큰 SHA-256 해시, 계정 ID, `expires_at`(로그인 시각 + 8h), `last_seen_at`. `revoked_at`과 `revoke_reason`은 비어 있다.
+
 - 판정 순서: 404 → 400 → 422 → 403. 처음 실패한 단계의 응답을 돌려준다.
 - `LOGIN_DENIED`는 이유와 상관없이 같은 코드와 같은 메시지를 쓴다. 호출자가 계정을 열거할 수 없게 하기 위해서다.
 - 부수 효과: 세션 행을 새로 만들고 토큰의 SHA-256 해시만 저장한다. 응답에 로그인 쿠키를 싣는다. 실패 시에는 세션도 쿠키도 만들지 않는다.
@@ -126,6 +135,7 @@
 | 403 | `FORBIDDEN` | `ROLES_REVOKED` 또는 `ACCOUNT_DEACTIVATED`로 폐기됨, 계정 비활성, 역할 없음 |
 
 - 부수 효과: 200일 때 `last_seen_at`을 갱신한다. `expiresAt`은 바꾸지 않는다.
+- 응답의 `roles`는 조회 시점의 현재 역할이다. 로그인 때의 역할을 저장해 두었다가 돌려주지 않는다.
 - 이 API는 프로필로 막지 않는다.
 
 ### 4.4 `POST /api/admin/auth/logout`
@@ -134,7 +144,8 @@
 - 요청: 없음. `local_session` 쿠키가 있으면 사용한다.
 - 응답: **항상 204**. 로그아웃 `Set-Cookie`(`Max-Age=0`)를 싣는다.
 - 오류 표는 없다. 세션이 없거나, 알 수 없는 토큰이거나, 이미 폐기·만료된 경우에도 204다(멱등).
-- 부수 효과: 유효한 세션이면 `revoked_at`을 기록하고 `revoke_reason`을 `LOGOUT`으로 남긴다. 이미 폐기된 세션의 `revoke_reason`은 덮어쓰지 않고 그대로 둔다.
+- 부수 효과: 폐기되지 않았고 만료되지 않은 세션만 `revoked_at`을 기록하고 `revoke_reason`을 `LOGOUT`으로 남긴다. 이미 폐기된 세션의 `revoke_reason`은 덮어쓰지 않고 그대로 둔다. 만료된 세션은 기록하지 않아도 된다.
+- "logout 후 401"은 같은 토큰으로 이후에 호출하는 `GET /session` 등에 해당한다. logout 자신은 항상 204다.
 - 이 API는 프로필로 막지 않고, 세션 판정 규칙(4.5)을 쓰지 않는다.
 
 ### 4.5 세션 판정 순서
@@ -159,6 +170,9 @@
 | 6 | 폐기 안 됨, 만료됨 | 401 `UNAUTHORIZED` |
 | 7 | 폐기 안 됨, 만료 전, 계정 비활성 또는 역할 없음 | 403 `FORBIDDEN` |
 | 8 | 폐기 안 됨, 만료 전, 활성 계정, 역할 있음 | 200 |
+| 9 | `ROLES_REVOKED`로 폐기 + 만료됨 | 403 `FORBIDDEN` |
+| 10 | `ACCOUNT_DEACTIVATED`로 폐기 + 만료됨 | 403 `FORBIDDEN` |
+| 11 | `LOGOUT`으로 폐기 + 만료됨 | 401 `UNAUTHORIZED` |
 
 폐기됨과 만료가 함께 걸리면 폐기 결과가 이긴다(예: `ROLES_REVOKED` + 만료 → 403).
 
@@ -171,7 +185,7 @@
 | `GET /session` | 사용 가능 | 게이팅하지 않음 |
 | `POST /logout` | 사용 가능 | 게이팅하지 않음 |
 
-`session`과 `logout`은 프로필로 막지 않는다. stg 이상에서도 이미 발급된 세션을 확인하고 정리할 수 있어야 하기 때문이다. `local`이 아닌 프로필에서 새 세션을 만들 수 있는 경로는 없다.
+api-spec §1은 `local-accounts`와 `local-login`만 `local` 전용으로 명시한다. 따라서 `session`과 `logout`은 프로필로 막지 않는다.
 
 ## 6. 보안 규칙
 

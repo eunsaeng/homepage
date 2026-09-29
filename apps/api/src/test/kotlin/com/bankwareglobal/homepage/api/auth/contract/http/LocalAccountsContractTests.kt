@@ -37,6 +37,21 @@ class LocalAccountsContractTests {
 
     @Disabled("request-apps-local-account-auth.md에서 구현")
     @Test
+    fun `items are ordered by accountId ascending`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `inactive accounts and accounts without a role are included`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `request cookie is not inspected`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
     fun `response never contains a token or secret`() {
     }
 }

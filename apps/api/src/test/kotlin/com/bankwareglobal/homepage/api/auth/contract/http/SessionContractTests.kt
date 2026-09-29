@@ -69,11 +69,41 @@ class SessionContractTests {
 
     @Disabled("request-apps-local-account-auth.md에서 구현")
     @Test
-    fun `inactive account or account without a role returns 403 FORBIDDEN`() {
+    fun `unrevoked session with inactive account returns 403 FORBIDDEN`() {
     }
 
     @Disabled("request-apps-local-account-auth.md에서 구현")
     @Test
-    fun `revoked and expired session follows the decision order`() {
+    fun `unrevoked session with account without a role returns 403 FORBIDDEN`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `ROLES_REVOKED revoked and expired session returns 403 FORBIDDEN`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `ACCOUNT_DEACTIVATED revoked and expired session returns 403 FORBIDDEN`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `LOGOUT revoked and expired session returns 401 UNAUTHORIZED`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `session roles reflect roles at query time`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `401 and 403 responses use error envelope with code, message, empty fields and traceId`() {
+    }
+
+    @Disabled("request-apps-local-account-auth.md에서 구현")
+    @Test
+    fun `401 and 403 error messages are Korean`() {
     }
 }
