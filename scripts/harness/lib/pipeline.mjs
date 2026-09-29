@@ -705,6 +705,24 @@ async function applyWikiSlice({ runDir, state, issue, plan, slice, stage, wikiDi
   return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, slice: slice.id, message: `Wiki edits were rejected ${MAX_SCHEMA_FAILURES} times.`, errors: rejected });
 }
 
+// Writes the local MR for a committed issue; resume jumps here for COMMITTED issues. The MR stage never
+// pauses: findings still open after an approved review are listed as follow-ups in the MR description.
+async function finishMergeRequest(runDir, state, issue, record, work, specMarkdown) {
+  const inputs = record.mr_inputs ?? { plan: '', review: '', verification: '' };
+  const diffStat = (await git(work.worktree, ['show', '--stat', '--oneline', 'HEAD'])).stdout;
+  const mr = await modelStage({ runDir, stage: `issues/${issue.id}/merge-request`, model: MODELS.localMr, prompt: `${PROMPTS.localMr(issue, specMarkdown, inputs.plan, inputs.review, inputs.verification, diffStat)}\n\nReturn JSON: {"title":"...","markdown":"# Local MR ...","follow_ups":["..."]}. This is local Git only; do not claim remote publication.` });
+  const followUps = [...(mr.data.follow_ups ?? []), ...(mr.data.unresolved ?? [])].map((entry) => `- ${typeof entry === 'string' ? entry : JSON.stringify(entry)}`);
+  const followUpSection = followUps.length ? `\n\n## Follow-ups\n\n${followUps.join('\n')}` : '';
+  record.mr_path = await writeNamedArtifact(runDir, `merge-requests/${issue.id}.md`, `${mr.data.markdown ?? mr.output}${followUpSection}\n\nSource branch: ${work.branch}\nCommit: ${record.commit_sha}`);
+  record.status = 'MR_READY';
+  record.completed_at = new Date().toISOString();
+  delete record.mr_inputs;
+  state.issues[issue.id] = record;
+  await saveIssueState(issue.id, record);
+  await saveState(state);
+  return { paused: false };
+}
+
 async function processIssue(runDir, state, issue, specMarkdown, item) {
   const record = state.issues[issue.id] ?? { status: 'READY', attempt: 0 };
   if (record.status === 'MR_READY') return { paused: false };
@@ -715,7 +733,10 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
   if (firstAttempt > maxAttempts) return pause(runDir, state, 'REVIEW_LIMIT', { issue: issue.id, attempts: record.attempt, message: 'The issue already used all allowed implementation/review iterations.' });
   const dependencyBase = await buildDependencyBase(runDir, state, issue);
   if (dependencyBase.paused) return dependencyBase;
+  // ensureWorktree resets the status, so remember first whether the issue was committed before a pause.
+  const committedBeforePause = record.status === 'COMMITTED' && Boolean(record.commit_sha);
   const work = await ensureWorktree(state, issue, dependencyBase.baseSha);
+  if (committedBeforePause) return finishMergeRequest(runDir, state, issue, record, work, specMarkdown);
   record.base_sha = dependencyBase.baseSha;
   state.issues[issue.id] = record;
   await saveIssueState(issue.id, record);
@@ -877,22 +898,20 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
     }
 
     const files = await changedPaths(work.worktree);
-    if (files.length === 0) return pause(runDir, state, 'UNRESOLVED', `Issue ${issue.id} passed review but has no changed files.`);
-    await git(work.worktree, ['add', '--', ...files]);
-    await git(work.worktree, [...commitIdentity, 'commit', '-m', `feat(${issue.primary_repository}): ${issue.id}`]);
-    const commitSha = (await git(work.worktree, ['rev-parse', 'HEAD'])).stdout.trim();
-    const diffStat = (await git(work.worktree, ['show', '--stat', '--oneline', 'HEAD'])).stdout;
-    const mr = await modelStage({ runDir, stage: `issues/${issue.id}/merge-request`, model: MODELS.localMr, prompt: `${PROMPTS.localMr(issue, specMarkdown, plan.markdown ?? '', review.output, verification, diffStat)}\n\nReturn JSON: {"title":"...","markdown":"# Local MR ...","unresolved":[]}. This is local Git only; do not claim remote publication.` });
-    if (mr.data.unresolved?.length) return waitForIssueDecision(runDir, state, issue.id, mr.data.unresolved, 'merge-request');
-    const mrPath = await writeNamedArtifact(runDir, `merge-requests/${issue.id}.md`, `${mr.data.markdown ?? mr.output}\n\nSource branch: ${work.branch}\nCommit: ${commitSha}`);
-    record.status = 'MR_READY';
-    record.commit_sha = commitSha;
-    record.mr_path = mrPath;
-    record.completed_at = new Date().toISOString();
+    // A resumed issue may already hold its commit (the run stopped between commit and MR).
+    const ahead = (await git(work.worktree, ['rev-list', '--count', `${record.base_sha}..HEAD`])).stdout.trim() !== '0';
+    if (files.length === 0 && !ahead) return pause(runDir, state, 'UNRESOLVED', `Issue ${issue.id} passed review but has no changed files.`);
+    if (files.length) {
+      await git(work.worktree, ['add', '--', ...files]);
+      await git(work.worktree, [...commitIdentity, 'commit', '-m', `feat(${issue.primary_repository}): ${issue.id}`]);
+    }
+    record.status = 'COMMITTED';
+    record.commit_sha = (await git(work.worktree, ['rev-parse', 'HEAD'])).stdout.trim();
+    record.mr_inputs = { plan: plan.markdown ?? '', review: review.output, verification };
     state.issues[issue.id] = record;
     await saveIssueState(issue.id, record);
     await saveState(state);
-    return { paused: false };
+    return finishMergeRequest(runDir, state, issue, record, work, specMarkdown);
   }
   return pause(runDir, state, 'REVIEW_LIMIT', `Issue ${issue.id} exceeded the review iteration limit.`);
 }

@@ -38,7 +38,7 @@ type HarnessState = {
 
 const priorityOrder: Record<string, number> = { P0: 0, P1: 1, P2: 2, P3: 3 };
 const requestId = (fileName: string) => `BL-${fileName.replace(/^request-/, "").replace(/\.md$/, "")}`;
-const inProgressIssueStatuses = new Set(["WORKTREE_READY", "IMPLEMENTING", "REWORK_REQUIRED", "REVIEWING"]);
+const inProgressIssueStatuses = new Set(["WORKTREE_READY", "IMPLEMENTING", "REWORK_REQUIRED", "REVIEWING", "COMMITTED"]);
 
 async function findWorkspaceRoot(start = process.cwd()): Promise<string> {
   let current = path.resolve(start);
