@@ -639,6 +639,13 @@ async function ensureWorktree(state, issue, baseSha) {
   return record;
 }
 
+function siblingIssuesNote(state, backlogId, issueId) {
+  const siblings = Object.entries(state.issues ?? {}).filter(([id, record]) => record.backlog_id === backlogId && id !== issueId);
+  if (!siblings.length) return '';
+  const lines = siblings.map(([id, record]) => `- ${id} (${record.status ?? 'READY'}): ${record.title ?? ''}\n  acceptance: ${(record.acceptance_criteria ?? []).join('; ')}`);
+  return `\n\nOther Development Issues of the same Spec (they own the Spec items not listed in the current issue; do not treat those items as missing here, and judge the current issue ${issueId} only against its own acceptance criteria):\n${lines.join('\n')}`;
+}
+
 // Wiki slices never touch files through Claude: the session proposes section or requirement-line replacements
 // from the excerpts it was given, and the controller applies them. Rejected proposals are retried with the errors.
 async function applyWikiSlice({ runDir, state, issue, plan, slice, stage, wikiDir, excerptList, wikiExcerpts, feedback }) {
@@ -693,7 +700,9 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
   const wikiDir = path.join(work.worktree, 'wiki');
   let excerptList = await buildWikiExcerpts(item, await indexWiki(wikiDir));
   let wikiExcerpts = excerptsToMarkdown(excerptList);
-  const planPrompt = `${PROMPTS.implementationPlan(issue, specMarkdown, wikiExcerpts, inventory.stdout)}\n\nReturn JSON: {"markdown":"# Implementation plan ...","slices":[{"id":"...","kind":"code|wiki","goal":"...","paths":["..."]}],"allowed_paths":["..."] ,"test_ids":["..."],"unresolved":[]}.`;
+  // The Spec is split across sibling issues; plans and reviews judge only this issue's own acceptance criteria.
+  const siblingNote = siblingIssuesNote(state, item.backlogId, issue.id);
+  const planPrompt = `${PROMPTS.implementationPlan(issue, specMarkdown, wikiExcerpts, inventory.stdout)}${siblingNote}\n\nReturn JSON: {"markdown":"# Implementation plan ...","slices":[{"id":"...","kind":"code|wiki","goal":"...","paths":["..."]}],"allowed_paths":["..."] ,"test_ids":["..."],"unresolved":[]}.`;
   let plan;
   let planFeedback = '';
   let planNotes = '';
@@ -728,7 +737,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
       if (planAttempt === 3) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, planErrors: sliceErrors });
       continue;
     }
-    const review = await modelStage({ runDir, stage: `issues/${issue.id}/plans/review-${planAttempt}`, model: MODELS.planReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.planReview(issue, specMarkdown, plan.markdown ?? response.output, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
+    const review = await modelStage({ runDir, stage: `issues/${issue.id}/plans/review-${planAttempt}`, model: MODELS.planReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.planReview(issue, specMarkdown, plan.markdown ?? response.output, wikiExcerpts)}${siblingNote}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `issues/${issue.id}/plans/plan-review-${planAttempt}.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
     // Only P0/P1 findings block a plan; lower-severity notes go to the implementation workers.
@@ -821,7 +830,7 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
     await saveState(state);
 
     // The reviewer may read the worktree (not wiki/) to check code the diff relies on, such as predecessor commits.
-    const review = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/review`, model: MODELS.codeReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.codeReview(issue, specMarkdown, plan.markdown ?? '', diff, verification, wikiExcerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
+    const review = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/review`, model: MODELS.codeReview, cwd: work.worktree, readOnly: true, prompt: `${PROMPTS.codeReview(issue, specMarkdown, plan.markdown ?? '', diff, verification, wikiExcerpts)}${siblingNote}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/review/code-review.md`, review.output);
     if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
     // P3 findings do not use up an iteration; they stay in the review artifact and the MR description.
