@@ -691,7 +691,8 @@ async function applyWikiSlice({ runDir, state, issue, plan, slice, stage, wikiDi
       readOnly: true,
       prompt: PROMPTS.wikiEdit(issue, plan.markdown ?? '', slice, wikiExcerpts, [feedback, rejected].filter(Boolean).join('\n\n')),
     });
-    if (response.data.unresolved?.length) return waitForIssueDecision(runDir, state, issue.id, response.data.unresolved, 'wiki-slice');
+    // A wiki slice only proposes text; its remarks are recorded with the edit instead of pausing the run.
+    const sliceNotes = [...(response.data.notes ?? []), ...(response.data.unresolved ?? [])].map((note) => (typeof note === 'string' ? note : JSON.stringify(note)));
     const edits = { sections: response.data.sections ?? [], requirementLines: response.data.requirement_lines ?? [] };
     const touched = [...edits.sections.map((edit) => edit.path), ...(edits.requirementLines.length ? ['wiki/requirements.md'] : [])];
     const notOwned = [...new Set(touched)].filter((file) => !(slice.paths ?? []).includes(file));
@@ -704,6 +705,9 @@ async function applyWikiSlice({ runDir, state, issue, plan, slice, stage, wikiDi
       response.data.summary ?? '',
       '',
       `Changed: ${result.changed.join(', ') || '(none)'}`,
+      '',
+      'Notes:',
+      sliceNotes.map((note) => `- ${note}`).join('\n') || '(none)',
       '',
       'Rejected edits:',
       result.errors.map((error) => `- ${error}`).join('\n') || '(none)',
