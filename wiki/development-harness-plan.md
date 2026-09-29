@@ -19,6 +19,8 @@
 - **backlog item 1개당 Spec 정확히 1개**를 생성한다. 한 Spec은 이후 여러 Development Issue로 분해될 수 있다.
 - 입력 파서는 `Primary repository`, `Request type`, `Status`, `근거`, `UNRESOLVED`, `구현 의존성` heading을 추출하고 source file hash를 기록한다.
 - `requirements/deferred/`의 요청은 backlog에 넣지 않는다. 외부 결정이 필요한 요청(현재 DAOU Office 실제 동기화)을 보류해 run이 초반에 멈추지 않게 하며, 요구사항 인용 여부 확인에만 사용한다.
+- backlog triage는 우선순위를 정하는 데 필요한 질문(알 수 없거나 모순된 선행 관계)만 `UNRESOLVED`로 올리고, 범위·근거에 대한 관찰은 `notes`로 Spec 생성에 넘긴다. Spec 생성이 이를 요청과 발췌로 결정하고, 근거로 답할 수 없는 것만 `UNRESOLVED`로 남긴다.
+- 요청 파일이나 그 요청의 wiki 발췌가 바뀌면(예: 사람이 `UNRESOLVED` 질문의 답을 wiki에 기록) 아직 issue로 분해되지 않은 Spec을 버리고 새 근거로 다시 생성한다. 그래서 답을 wiki에 적은 뒤 `resume`하면 된다.
 - `pnpm harness validate`는 run 전에 요청 문서를 결정론적으로 검사한다: 파일명 `request-<primary repo>-<title>.md`, 인용 heading·행 범위 일치(heading 행부터 ID 행까지), 의존 방향(apps → admin/web → e2e), 모든 요구사항 ID 인용, 여러 repository에 걸친 기능의 apps·e2e 요청 존재. 결과와 요청별 근거 추적은 `.harness/preflight/`에 남긴다. `wiki/requirements.md` 행이 바뀌면 `validate --fix`가 인용을 다시 맞춘다.
 - 현재 요청 파일에는 명시 priority가 없으므로 backlog index의 독립 Sonnet 세션이 item마다 P0~P3과 근거를 먼저 제안한다. Spec 생성 Opus는 이 값을 입력으로 사용하며 임의로 재정렬하지 않는다. 기존 `구현 의존성`은 선행 관계로 가져오고, 새 관계는 Spec에서 근거와 함께 제안한다.
 - priority 의미는 P0=차단/보안, P1=핵심 사용자 경로, P2=지원 경로, P3=후속 개선으로 고정한다. 동률은 dependency depth, backlog ID 사전순으로 정렬한다.
@@ -37,9 +39,9 @@
 
 | 요청이 인용한 ID | 발췌 section |
 |---|---|
-| 모든 요청 | `requirements.md`의 인용 행 범위, `api-spec.md` 「공통 규칙」 |
+| 모든 요청 | `requirements.md`의 인용 행 범위, `api-spec.md` 「공통 규칙」·「공통 데이터 형식」 |
 | `ACC-*` | `architecture.md` 「로컬 계정 및 권한 처리」, `api-spec.md` 「로컬 stub 인증 API」·「계정 및 역할 API」, `erd.md` `account`·`app_role`·`account_role`·`account_sync_run`·`admin_session` |
-| `CMS-*` | `architecture.md` 「API 및 데이터 흐름」, `api-spec.md` 「공통 데이터 형식」·「관리자 콘텐츠 API」, `erd.md` `content_page`·`content_revision` |
+| `CMS-*` | `architecture.md` 「API 및 데이터 흐름」, `api-spec.md` 「관리자 콘텐츠 API」, `erd.md` `content_page`·`content_revision` |
 | `WEB-*` | `architecture.md` 「애플리케이션 책임」, `api-spec.md` 「공개 API」·「관리자 메뉴 API」, `erd.md` `content_page`·`navigation_item` |
 
 ## 3. 전체 파이프라인

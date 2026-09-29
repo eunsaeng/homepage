@@ -81,7 +81,10 @@ export async function buildWikiExcerpts(item, index) {
   }
 
   const ids = new Set(item.sources.map((source) => source.requirementId));
-  if (ids.size > 0) await addSection('api-spec.md', /공통 규칙/);
+  if (ids.size > 0) {
+    await addSection('api-spec.md', /공통 규칙/);
+    await addSection('api-spec.md', /공통 데이터 형식/);
+  }
   if ([...ids].some((id) => id.startsWith('ACC-'))) {
     await addSection('architecture.md', /로컬 계정 및 권한 처리/);
     await addSection('api-spec.md', /로컬 stub 인증 API/);
@@ -92,7 +95,6 @@ export async function buildWikiExcerpts(item, index) {
   }
   if ([...ids].some((id) => id.startsWith('CMS-'))) {
     await addSection('architecture.md', /API 및 데이터 흐름/);
-    await addSection('api-spec.md', /공통 데이터 형식/);
     await addSection('api-spec.md', /관리자 콘텐츠 API/);
     await addSection('erd.md', /^`content_page`$/);
     await addSection('erd.md', /^`content_revision`$/);

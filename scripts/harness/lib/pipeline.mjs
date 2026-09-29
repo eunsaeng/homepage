@@ -202,7 +202,7 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
       runDir,
       stage: `backlog-index/${item.backlogId}`,
       model: MODELS.backlogIndex,
-      prompt: `${PROMPTS.backlogIndex(item, excerptMarkdown)}\n\nUse only the request's priority/dependency ambiguity for unresolved. Carry requirement-level UNRESOLVED forward to Spec creation. Return JSON: {"priority":"P0|P1|P2|P3","rationale":"...","dependencies":["BL-id or request-file.md"],"unresolved":[]}.`,
+      prompt: `${PROMPTS.backlogIndex(item, excerptMarkdown)}\n\nUse only the request's priority/dependency ambiguity for unresolved; everything else goes in notes. Carry requirement-level UNRESOLVED forward to Spec creation. Return JSON: {"priority":"P0|P1|P2|P3","rationale":"...","dependencies":["BL-id or request-file.md"],"notes":["..."],"unresolved":[]}.`,
     });
     await writeNamedArtifact(runDir, `backlog-index/${item.backlogId}.md`, stage.output);
     if (stage.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', stage.data.unresolved);
@@ -218,6 +218,7 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
       excerpt_hash: excerptHash,
       priority: assignedPriority,
       priority_rationale: stage.data.rationale ?? '',
+      triage_notes: stage.data.notes ?? [],
       dependencies,
       triage_status: 'READY',
       status: state.backlog[item.backlogId]?.status === 'COMPLETED' ? 'COMPLETED' : 'INDEXED',
@@ -268,7 +269,7 @@ async function generateSpec(runDir, state, item, wikiIndex) {
       ['Backlog priority/dependencies', JSON.stringify({ priority: record.priority, rationale: record.priority_rationale, dependencies: record.dependencies }, null, 2)],
       ['Relevant wiki excerpts only', excerpts],
     ]);
-    const stage = await modelStage({ runDir, stage: `specs/${item.backlogId}`, model: MODELS.spec, prompt: `${PROMPTS.spec(item, record.priority, excerpts)}\n\nReturn JSON: {"markdown":"# Spec ...","priority":"${record.priority}","dependencies":["BL-id"],"primary_repositories":["apps|web|admin|e2e"],"unresolved":[]}. Do not change priority.` });
+    const stage = await modelStage({ runDir, stage: `specs/${item.backlogId}`, model: MODELS.spec, prompt: `${PROMPTS.spec(item, record.priority, excerpts, record.priority_rationale, record.triage_notes)}\n\nReturn JSON: {"markdown":"# Spec ...","priority":"${record.priority}","dependencies":["BL-id"],"primary_repositories":["apps|web|admin|e2e"],"unresolved":[]}. Do not change priority.` });
     specMarkdown = stage.data.markdown ?? stage.output;
     const sourceUnresolved = item.hasUnresolved ? [item.unresolvedText] : [];
     const allQuestions = [...sourceUnresolved, ...(stage.data.unresolved ?? [])];
