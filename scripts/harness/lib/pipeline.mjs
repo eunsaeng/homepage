@@ -9,6 +9,7 @@ import { PROMPTS } from './prompts.mjs';
 import { getGitBase, git } from './git.mjs';
 import { buildWikiExcerpts, excerptsToMarkdown, indexWiki } from './wiki-context.mjs';
 import { applyWikiEdits } from './wiki-patch.mjs';
+import { applyDashboardCommands, normalizeQuestion, pendingQuestions } from './commands.mjs';
 import { createInitialState, loadState, saveIssueState, saveState, withStateLock } from './state.mjs';
 import { appendJsonLine, atomicWrite, ensureDir, newId, parseJsonPayload, runProcess, safeId, sha256, writeStageMarkdown } from './util.mjs';
 
@@ -17,7 +18,7 @@ const commitIdentity = ['-c', 'user.name=Homepage Harness', '-c', 'user.email=ha
 let activeState = null;
 
 const MAX_SCHEMA_FAILURES = 3;
-const SPEC_FIELDS = ['spec_markdown', 'spec_status', 'spec_path', 'unresolved_questions', 'unresolved_resolutions', 'resolutions_appended', 'approval'];
+const SPEC_FIELDS = ['spec_markdown', 'spec_status', 'spec_path', 'unresolved_questions', 'unresolved_resolutions', 'appended_resolution_ids', 'human_approval', 'review_findings', 'approval'];
 
 // The model answered but not in the requested JSON shape; retried a few times, then treated as a human decision.
 class StageSchemaError extends Error {}
@@ -88,6 +89,16 @@ export async function modelStage({ runDir, stage, model, prompt, cwd = runDir, e
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+}
+
+// Applies dashboard commands (pins, answers, Spec edits and approvals) to the in-memory state.
+async function applyCommandsAtCheckpoint(state) {
+  const results = await applyDashboardCommands(state);
+  if (!results.length) return;
+  for (const result of results) {
+    if (result.status === 'applied' && result.command.type === 'pin-issue') await saveIssueState(result.command.issue_id, state.issues[result.command.issue_id]);
+  }
+  await saveState(state);
 }
 
 async function writeNamedArtifact(runDir, relativePath, markdown) {
@@ -188,7 +199,8 @@ async function triageBacklog(runDir, state, items, wikiIndex) {
     if (saved?.source_hash === item.contentHash && saved?.excerpt_hash === excerptHash && saved?.priority && saved?.triage_status === 'READY') continue;
     // The request or its wiki evidence changed (for example after a human answered an UNRESOLVED question in
     // the wiki). A Spec that has not been split into issues yet is regenerated from the new evidence.
-    if (saved && saved.status !== 'COMPLETED' && !saved.issue_ids?.length && (saved.source_hash !== item.contentHash || saved.excerpt_hash !== excerptHash)) {
+    // A Spec edited in the dashboard is kept; the person who edited it owns reconciling it with the new evidence.
+    if (saved && saved.status !== 'COMPLETED' && !saved.issue_ids?.length && !saved.spec_edited_by_human && (saved.source_hash !== item.contentHash || saved.excerpt_hash !== excerptHash)) {
       for (const field of SPEC_FIELDS) delete saved[field];
     }
     const excerptMarkdown = excerptsToMarkdown(excerpts);
@@ -263,6 +275,7 @@ async function generateSpec(runDir, state, item, wikiIndex) {
   }
   const excerpts = excerptsToMarkdown(await buildWikiExcerpts(item, wikiIndex));
   let specMarkdown = record.spec_markdown ?? null;
+  record.spec_path ??= `specs/${item.backlogId}/spec.md`;
   if (!specMarkdown) {
     const input = stageInput('Spec generation', [
       ['Backlog request', item.markdown],
@@ -271,9 +284,11 @@ async function generateSpec(runDir, state, item, wikiIndex) {
     ]);
     const stage = await modelStage({ runDir, stage: `specs/${item.backlogId}`, model: MODELS.spec, prompt: `${PROMPTS.spec(item, record.priority, excerpts, record.priority_rationale, record.triage_notes)}\n\nReturn JSON: {"markdown":"# Spec ...","priority":"${record.priority}","dependencies":["BL-id"],"primary_repositories":["apps|web|admin|e2e"],"unresolved":[]}. Do not change priority.` });
     specMarkdown = stage.data.markdown ?? stage.output;
-    const sourceUnresolved = item.hasUnresolved ? [item.unresolvedText] : [];
-    const allQuestions = [...sourceUnresolved, ...(stage.data.unresolved ?? [])];
-    record.unresolved_questions = [...new Map(allQuestions.map((text) => [sha256(text).slice(0, 16), { id: sha256(text).slice(0, 16), text, source: sourceUnresolved.includes(text) ? 'backlog' : 'spec' }])).values()];
+    const questions = [
+      ...(item.hasUnresolved ? [normalizeQuestion(item.unresolvedText, 'backlog')] : []),
+      ...(stage.data.unresolved ?? []).map((entry) => normalizeQuestion(entry, 'spec')),
+    ];
+    record.unresolved_questions = [...new Map(questions.map((question) => [question.id, question])).values()];
     record.spec_markdown = specMarkdown;
     record.spec_status = record.unresolved_questions.length ? 'WAITING_FOR_HUMAN' : 'SPEC_REVIEW_PENDING';
     record.spec_path = `specs/${item.backlogId}/spec.md`;
@@ -281,36 +296,56 @@ async function generateSpec(runDir, state, item, wikiIndex) {
     await saveState(state);
   }
 
-  const unresolvedQuestions = record.unresolved_questions ?? [];
-  const unresolvedResolutions = record.unresolved_resolutions ?? {};
-  const pendingQuestions = unresolvedQuestions.filter((question) => !unresolvedResolutions[question.id]?.trim());
-  if (pendingQuestions.length) {
+  // Questions stay on the record so the dashboard can answer them; the run waits until all are answered.
+  const waitForHuman = async (newQuestions) => {
+    const known = new Map((record.unresolved_questions ?? []).map((question) => [question.id, question]));
+    for (const question of newQuestions) if (!known.has(question.id)) known.set(question.id, question);
+    record.unresolved_questions = [...known.values()];
     record.status = 'WAITING_FOR_HUMAN';
+    record.spec_status = 'WAITING_FOR_HUMAN';
     await saveState(state);
-    return pause(runDir, state, 'UNRESOLVED', pendingQuestions.map((question) => ({ id: question.id, text: question.text, source: question.source })));
-  }
-  if (unresolvedQuestions.length && !record.resolutions_appended) {
-    specMarkdown += `\n\n## Human decisions\n\n${unresolvedQuestions.map((question) => `### ${question.text}\n\n${unresolvedResolutions[question.id]}`).join('\n\n')}`;
+    return pause(runDir, state, 'UNRESOLVED', pendingQuestions(record).map(({ id, text, options, source }) => ({ id, text, options, source })));
+  };
+  if (pendingQuestions(record).length) return waitForHuman([]);
+
+  // Answers not yet written into the Spec are appended once, so a revised Spec keeps earlier decisions too.
+  const appended = new Set(record.appended_resolution_ids ?? []);
+  const freshAnswers = (record.unresolved_questions ?? []).filter((question) => !appended.has(question.id));
+  if (freshAnswers.length) {
+    const heading = specMarkdown.includes('\n## Human decisions\n') ? '' : '\n\n## Human decisions';
+    specMarkdown += `${heading}\n\n${freshAnswers.map((question) => `### ${question.text}\n\n${record.unresolved_resolutions[question.id]}`).join('\n\n')}`;
     record.spec_markdown = specMarkdown;
-    record.resolutions_appended = true;
+    record.appended_resolution_ids = [...appended, ...freshAnswers.map((question) => question.id)];
     record.spec_status = 'SPEC_REVIEW_PENDING';
     await writeNamedArtifact(runDir, record.spec_path, specMarkdown);
     await saveState(state);
   }
 
+  const approve = async (type) => {
+    record.status = 'SPEC_APPROVED';
+    record.spec_markdown = specMarkdown;
+    record.spec_status = 'SPEC_APPROVED';
+    record.approval = { type, approved_at: new Date().toISOString() };
+    await writeNamedArtifact(runDir, record.spec_path ?? `specs/${item.backlogId}/spec.md`, specMarkdown);
+    await saveState(state);
+    return { paused: false, specMarkdown };
+  };
+  // Approval from the dashboard replaces the automatic review.
+  if (record.human_approval) return approve('human');
+
   for (let reviewAttempt = 1; reviewAttempt <= 3; reviewAttempt += 1) {
     const review = await modelStage({ runDir, stage: `approvals/${item.backlogId}/attempt-${reviewAttempt}`, model: MODELS.specApproval, prompt: `${PROMPTS.specApproval(specMarkdown, item.markdown, excerpts)}\n\nReturn JSON: {"decision":"APPROVE|REQUEST_CHANGES","findings":[],"unresolved":[]}.` });
     await writeNamedArtifact(runDir, `approvals/${item.backlogId}/attempt-${reviewAttempt}/approval-review.md`, review.output);
-    if (review.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', review.data.unresolved);
-    if (review.data.decision === 'APPROVE') {
-      state.backlog[item.backlogId].status = 'SPEC_APPROVED';
-      state.backlog[item.backlogId].spec_markdown = specMarkdown;
-      state.backlog[item.backlogId].spec_status = 'SPEC_APPROVED';
-      state.backlog[item.backlogId].approval = { type: 'automatic', approved_at: new Date().toISOString() };
+    if (review.data.unresolved?.length) return waitForHuman(review.data.unresolved.map((entry) => normalizeQuestion(entry, 'approval')));
+    if (review.data.decision === 'APPROVE') return approve('automatic');
+    if (reviewAttempt === 3) {
+      // A person decides: edit the Spec (reviewed again on resume) or approve it as it is.
+      record.status = 'WAITING_FOR_HUMAN';
+      record.spec_status = 'NEEDS_HUMAN_REVIEW';
+      record.review_findings = review.data.findings ?? [];
       await saveState(state);
-      return { paused: false, specMarkdown };
+      return pause(runDir, state, 'UNRESOLVED', { backlog: item.backlogId, message: 'Spec review requested changes three times. Edit or approve the Spec in the dashboard, then resume.', findings: record.review_findings });
     }
-    if (reviewAttempt === 3) return pause(runDir, state, 'UNRESOLVED', 'Spec review requested changes three times; record the unresolved decision in the backlog item.');
     const revisionPrompt = [
       stageInput('Revise Spec', [
         ['Current Spec', specMarkdown],
@@ -320,8 +355,10 @@ async function generateSpec(runDir, state, item, wikiIndex) {
       `Return JSON: {"markdown":"# Revised Spec ...","priority":"${record.priority}","dependencies":["BL-id"],"primary_repositories":["apps|web|admin|e2e"],"unresolved":[]}.`,
     ].join('\n\n');
     const revision = await modelStage({ runDir, stage: `specs/${item.backlogId}/revision-${reviewAttempt}`, model: MODELS.spec, prompt: revisionPrompt });
-    if (revision.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', revision.data.unresolved);
+    if (revision.data.unresolved?.length) return waitForHuman(revision.data.unresolved.map((entry) => normalizeQuestion(entry, 'spec')));
     specMarkdown = revision.data.markdown;
+    record.spec_markdown = specMarkdown;
+    await saveState(state);
     await writeNamedArtifact(runDir, `specs/${item.backlogId}/spec.md`, specMarkdown);
   }
   return { paused: false, specMarkdown };
@@ -821,15 +858,12 @@ async function createSpecIssuesAndRun(runDir, state, item, wikiIndex, allItems) 
   while ([...currentIssueIds].some((id) => !completed.has(id))) {
     const ready = issueResult.issues.filter((issue) => !completed.has(issue.id) && issue.dependencies.every((dep) => completed.has(dep)));
     if (!ready.length) return pause(runDir, state, 'UNRESOLVED', `No READY issue remains in DAG ${item.backlogId}.`);
+    await applyCommandsAtCheckpoint(state);
+    // One issue per repository lane; a pinned issue goes first in its lane without stopping the other lanes.
     const selected = [];
-    const pinnedReady = sortIssueCandidates(ready.filter((issue) => state.issues[issue.id]?.pinned), state.issues);
-    if (pinnedReady.length) {
-      selected.push(pinnedReady[0]);
-    } else {
-      for (const repository of REPOSITORIES) {
-        const candidate = sortIssueCandidates(ready.filter((issue) => issue.primary_repository === repository), state.issues)[0];
-        if (candidate) selected.push(candidate);
-      }
+    for (const repository of REPOSITORIES) {
+      const candidate = sortIssueCandidates(ready.filter((issue) => issue.primary_repository === repository), state.issues)[0];
+      if (candidate) selected.push(candidate);
     }
     const selectionInput = stageInput('READY issue wave', [['Candidates', JSON.stringify(selected.map(({ id, primary_repository, priority, dependencies }) => ({ id, primary_repository, priority, dependencies })), null, 2)]]);
     const waveId = `issues-${state.backlog_cursor}-${completed.size}`;
@@ -871,6 +905,7 @@ export async function runHarness({ resume = false, only = [] } = {}) {
       state.only_backlog_ids = only;
     }
     activeState = state;
+    await applyCommandsAtCheckpoint(state);
     state.phase = 'RUNNING';
     await saveState(state);
     const runDir = path.join(RUNS_DIR, state.run_id);
@@ -893,6 +928,7 @@ export async function runHarness({ resume = false, only = [] } = {}) {
     if (triage.paused) return triage;
 
     while (true) {
+      await applyCommandsAtCheckpoint(state);
       const item = await selectBacklog(runDir, state, items);
       if (item === null) {
         state.phase = 'QUEUE_DRAINED';
