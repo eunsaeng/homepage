@@ -715,8 +715,8 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
 
     // Diff against this issue's own base so predecessor commits merged into it are not reviewed again.
     const diff = await getDiff(work.worktree, record.base_sha);
-    const testPlan = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/test-plan`, model: MODELS.testPlan, prompt: `${PROMPTS.testPlan(issue, plan.markdown ?? '', diff, tests.map((id) => ({ id })))}\n\nSelect every relevant allowed test id. Return JSON: {"test_ids":["..."],"rationale":"...","unresolved":[]}.` });
-    if (testPlan.data.unresolved?.length) return pause(runDir, state, 'UNRESOLVED', testPlan.data.unresolved);
+    const testPlan = await modelStage({ runDir, stage: `issues/${issue.id}/iterations/${attempt}/test-plan`, model: MODELS.testPlan, prompt: `${PROMPTS.testPlan(issue, plan.markdown ?? '', diff, tests.map((id) => ({ id })))}\n\nSelect every relevant allowed test id. Return JSON: {"test_ids":["..."],"rationale":"...","concerns":["..."]}.` });
+    // The test plan only picks commands; doubts about the change go to the reviewer, since real test results follow.
     const testIds = testPlan.data.test_ids?.length ? testPlan.data.test_ids : tests;
     const invalidTestIds = testIds.filter((id) => !tests.includes(id));
     if (invalidTestIds.length) return pause(runDir, state, 'UNRESOLVED', { issue: issue.id, message: 'Test plan selected commands outside the repository allowlist.', invalidTestIds });
@@ -738,7 +738,9 @@ async function processIssue(runDir, state, issue, specMarkdown, item) {
       await appendJsonLine(path.join(runDir, 'logs', 'controller.jsonl'), { stage: 'test', issue_id: issue.id, attempt, command_id: result.id, exit_code: result.exit_code, log_path: logPath });
     }
     const testsPassed = testResults.length > 0 && testResults.every((result) => result.exit_code === 0);
-    const verification = testResults.map((result) => `## ${result.id}: ${result.exit_code === 0 ? 'PASS' : 'FAIL'}\n\nExit code: ${result.exit_code}\n\n\`\`\`text\n${result.stdout}\n${result.stderr}\n\`\`\``).join('\n\n');
+    const verificationResults = testResults.map((result) => `## ${result.id}: ${result.exit_code === 0 ? 'PASS' : 'FAIL'}\n\nExit code: ${result.exit_code}\n\n\`\`\`text\n${result.stdout}\n${result.stderr}\n\`\`\``).join('\n\n');
+    const testConcerns = (testPlan.data.concerns ?? testPlan.data.unresolved ?? []).map((concern) => `- ${typeof concern === 'string' ? concern : JSON.stringify(concern)}`).join('\n');
+    const verification = testConcerns ? `${verificationResults}\n\n## Test plan concerns for review\n\n${testConcerns}` : verificationResults;
     await writeStageMarkdown(path.join(runDir, 'issues', issue.id, 'iterations', String(attempt), 'verification-stage'), testStageInput, verification || 'No test commands were executed.');
     await writeNamedArtifact(runDir, `issues/${issue.id}/iterations/${attempt}/verification.md`, verification);
     state.active_stages[testStageKey] = { model: MODELS.testPlan, status: testResults.every((result) => result.exit_code === 0) ? 'COMPLETE' : 'FAILED', completed_at: new Date().toISOString() };
