@@ -20,9 +20,15 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
+  // In CI (the harness sets CI=1) the web and admin dev servers compile pages on first request; running many
+  // browsers in parallel against them caused timeouts and closed pages, so CI uses few workers and longer limits.
+  workers: process.env.CI ? 2 : undefined,
+  timeout: process.env.CI ? 90_000 : 30_000,
+  expect: { timeout: process.env.CI ? 15_000 : 5_000 },
   reporter: 'list',
   use: {
     baseURL: webURL,
+    navigationTimeout: process.env.CI ? 45_000 : undefined,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
