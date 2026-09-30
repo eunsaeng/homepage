@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runProcess } from '../lib/util.mjs';
-import { carryOverCompleted, isRepositoryTestPath, modelStage, StagePauseError } from '../lib/pipeline.mjs';
+import { carryOverCompleted, condensePlaywrightOutput, isRepositoryTestPath, modelStage, StagePauseError } from '../lib/pipeline.mjs';
 
 // A stand-in for `claude -p --output-format json`: replies from a script of responses, one per call.
 async function fakeClaude(dir, replies) {
@@ -98,4 +98,23 @@ test('only test sources of the issue repository may be updated outside the plan 
   assert.equal(isRepositoryTestPath('admin/src/lib/auth/session.ts', 'admin'), false);
   assert.equal(isRepositoryTestPath('web/src/app/page.spec.tsx', 'admin'), false);
   assert.equal(isRepositoryTestPath('e2e/tests/login.spec.ts', 'e2e'), true);
+});
+
+test('Playwright output keeps every test result, failures and the summary, and drops server logs', () => {
+  const output = [
+    '[api] 2026 INFO started',
+    'Running 3 tests using 2 workers',
+    '  ok 1 [chromium] › tests/a.spec.ts:3:5 › a (1s)',
+    '[web] compiled /page',
+    '  ✘  2 [chromium] › tests/b.spec.ts:4:5 › b (2s)',
+    '  ok 3 [chromium] › tests/c.spec.ts:5:5 › c (1s)',
+    '',
+    '  1) [chromium] › tests/b.spec.ts:4:5 › b',
+    '    Error: expected 1',
+    '  1 failed',
+    '  2 passed (5s)',
+  ].join('\n');
+  const condensed = condensePlaywrightOutput(output);
+  assert.ok(!condensed.includes('[api]') && !condensed.includes('[web]'));
+  for (const kept of ['Running 3 tests', 'a.spec.ts', 'b.spec.ts:4:5 › b (2s)', 'c.spec.ts', 'Error: expected 1', '1 failed', '2 passed']) assert.ok(condensed.includes(kept), kept);
 });

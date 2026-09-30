@@ -573,12 +573,29 @@ export async function testCommandsFor(repository, worktree, ids) {
         });
       }
       const result = await runProcess(definition.command, definition.args, { cwd: worktree, env, timeoutMs: 30 * 60 * 1000 });
-      results.push({ id, exit_code: result.code, stdout: result.stdout.slice(-12000), stderr: result.stderr.slice(-12000) });
+      const stdout = id === 'e2e:test' ? condensePlaywrightOutput(result.stdout) : result.stdout;
+      results.push({ id, exit_code: result.code, stdout: stdout.slice(-60000), stderr: result.stderr.slice(-12000) });
     } finally {
       if (database) await database.drop();
     }
   }
   return results;
+}
+
+// A full Playwright run prints server logs and hundreds of lines; reviewers need every test's result line, the
+// summary and the failure details. Server output ([api]/[web]/[admin] prefixes) is dropped.
+export function condensePlaywrightOutput(stdout) {
+  const kept = [];
+  let failureLines = 0;
+  for (const line of stdout.split(/\r?\n/)) {
+    if (/^\[(api|web|admin)\]/.test(line)) continue;
+    if (/^\s+\d+\) \[chromium\] ›/.test(line)) failureLines = 40; // start of a failure report
+    const isResult = line.includes('[chromium] ›');
+    const isSummary = /^\s*\d+ (passed|failed|flaky|skipped|did not run|interrupted)\b/.test(line) || /^Running \d+ tests?/.test(line);
+    if (isResult || isSummary || failureLines > 0) kept.push(line);
+    if (failureLines > 0) failureLines -= 1;
+  }
+  return kept.length ? kept.join('\n') : stdout;
 }
 
 // E2E runs get their own database in the local PostgreSQL container so parallel lanes and the developer's
